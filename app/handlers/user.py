@@ -28,6 +28,7 @@ from app.database.crud import (
     get_user_balance,
     get_all_packages
 )
+from app.utils.message_helpers import safe_edit_text
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -296,13 +297,13 @@ def _format_styles_preview(styles):
 
 @router.callback_query(F.data == "back_to_ratio")
 async def back_ratio(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Выберите пропорции:", reply_markup=get_aspect_ratio_keyboard())
+    await safe_edit_text(callback.message, "Выберите пропорции:", reply_markup=get_aspect_ratio_keyboard())
     await state.set_state(PhotoshootStates.selecting_aspect_ratio)
 
 @router.callback_query(F.data == "back_to_style_selection")
 async def back_styles(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    await callback.message.edit_text(f"✅ Пропорции: {data['aspect_ratio']}\nВыберите метод:", reply_markup=get_style_selection_keyboard())
+    await safe_edit_text(callback.message, f"✅ Пропорции: {data['aspect_ratio']}\nВыберите метод:", reply_markup=get_style_selection_keyboard())
     await state.set_state(PhotoshootStates.selecting_styles_method)
 
 @router.callback_query(F.data == "new_photoshoot")
@@ -372,7 +373,7 @@ async def show_profile(callback: CallbackQuery, session: AsyncSession):
             f"✅ Обработано изображений: {user.total_images_processed}\n"
         )
 
-        await callback.message.edit_text(text, parse_mode="HTML")
+        await safe_edit_text(callback.message, text, parse_mode="HTML")
         await callback.answer()
     except Exception as e:
         logger.error(f"Error showing profile: {e}", exc_info=True)
