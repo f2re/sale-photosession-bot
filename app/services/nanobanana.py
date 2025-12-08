@@ -74,6 +74,7 @@ class NanoBananaService:
             # Payload for chat completion with image output
             payload = {
                 "model": self.model,
+                "modalities": ["text", "image"],  # Required for image generation
                 "messages": [
                     {
                         "role": "system",
@@ -96,9 +97,7 @@ class NanoBananaService:
                             }
                         ]
                     }
-                ],
-                # Provider-specific parameters for image generation might vary
-                # We request a model that supports image output
+                ]
             }
             
             logger.info(f"Sending generation request to {self.model}...")
@@ -112,51 +111,57 @@ class NanoBananaService:
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
-                        
+
                         # Extract image from response
-                        # Standard chat completion with image content
+                        # OpenRouter returns images in the message.images field
+                        # Response format:
+                        # {
+                        #   "choices": [{
+                        #     "message": {
+                        #       "role": "assistant",
+                        #       "content": "...",
+                        #       "images": [{
+                        #         "type": "image_url",
+                        #         "image_url": {
+                        #           "url": "data:image/png;base64,..."
+                        #         }
+                        #       }]
+                        #     }
+                        #   }]
+                        # }
+
                         choices = result.get('choices', [])
                         if not choices:
                             return {"success": False, "image_bytes": None, "error": "No output from API"}
-                            
+
                         message = choices[0].get('message', {})
-                        content = message.get('content', '')
-                        
-                        # Check for base64 image in content or specific fields
-                        # Some providers return image URL in content or as attachment
-                        # This logic depends heavily on the specific model provider's response format for images
-                        # Assuming Markdown image format ![image](url) or base64
-                        
-                        # For now, we assume the model returns a URL or base64 in text or a specific 'image' field if supported
-                        # If using a specific image gen model via OpenRouter, the format might differ.
-                        # We'll try to extract a URL or Base64 string.
-                        
-                        import re
-                        # Look for markdown image
-                        url_match = re.search(r'!\[.*?\]\((.*?)\)', content)
-                        
-                        image_url = None
-                        if url_match:
-                            image_url = url_match.group(1)
-                        elif 'http' in content:
-                            # Try to find http url
-                            url_match = re.search(r'(https?://[^\s\)]+)', content)
-                            if url_match:
-                                image_url = url_match.group(1)
-                                
-                        if image_url:
-                            # Download image
-                            async with session.get(image_url) as img_resp:
-                                if img_resp.status == 200:
-                                    image_bytes = await img_resp.read()
+                        images = message.get('images', [])
+
+                        # Check if we have images in the response
+                        if images and len(images) > 0:
+                            # Extract the first image
+                            first_image = images[0]
+                            image_url_obj = first_image.get('image_url', {})
+                            data_url = image_url_obj.get('url', '')
+
+                            # data_url format: "data:image/png;base64,iVBORw0KGgo..."
+                            if data_url.startswith('data:image/'):
+                                # Extract base64 data after the comma
+                                try:
+                                    base64_data = data_url.split(',', 1)[1]
+                                    image_bytes = base64.b64decode(base64_data)
                                     return {"success": True, "image_bytes": image_bytes, "error": None}
-                                else:
-                                    return {"success": False, "image_bytes": None, "error": f"Failed to download image: {img_resp.status}"}
-                        
-                        # Check for 'images' field (OpenAI DALL-E style if proxied)
-                        # But OpenRouter chat completions usually put text.
-                        
-                        return {"success": False, "image_bytes": None, "error": "Could not extract image from response"}
+                                except Exception as e:
+                                    logger.error(f"Failed to decode base64 image: {e}")
+                                    return {"success": False, "image_bytes": None, "error": f"Failed to decode image: {str(e)}"}
+                            else:
+                                return {"success": False, "image_bytes": None, "error": "Invalid image data URL format"}
+
+                        # No images in response
+                        content = message.get('content', '')
+                        logger.error(f"No images in response. Content: {content[:200]}")
+                        logger.debug(f"Full response: {result}")
+                        return {"success": False, "image_bytes": None, "error": "No images generated in response"}
                         
                     else:
                         error_text = await response.text()
