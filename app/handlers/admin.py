@@ -386,8 +386,8 @@ async def admin_add_images_count(message: Message, state: FSMContext):
 
         # Create manual package entry
         manual_package = Package(
-            name=f"Manual {count} images",
-            images_count=count,
+            name=f"Manual {count} photoshoots",
+            photoshoots_count=count,  # Fixed: photoshoots_count, not images_count
             price_rub=0,
             is_active=False
         )
@@ -403,11 +403,16 @@ async def admin_add_images_count(message: Message, state: FSMContext):
             invoice_id=f"manual_{user.id}_{int(__import__('time').time())}"
         )
         session.add(order)
+        await session.flush()
+
+        # Manually add photoshoots to user balance
+        user.images_remaining += count
         await session.commit()
 
     await state.clear()
     await message.answer(
-        f"✅ Добавлено {count} изображений пользователю {target_user_id}"
+        f"✅ Добавлено {count} фотосессий пользователю {target_user_id}\n\n"
+        f"Теперь у пользователя доступно фотосессий: {user.images_remaining}"
     )
 
 
