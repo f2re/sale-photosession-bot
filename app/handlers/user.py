@@ -326,7 +326,7 @@ async def show_packages(callback: CallbackQuery, session: AsyncSession):
             {
                 'id': p.id,
                 'name': p.name,
-                'images_count': p.images_count,
+                'images_count': p.photoshoots_count,  # Note: photoshoots_count in DB
                 'price_rub': float(p.price_rub)
             }
             for p in packages
@@ -369,7 +369,7 @@ async def show_profile(callback: CallbackQuery, session: AsyncSession):
             f"🆓 Бесплатных: {balance['free']}\n"
             f"💰 Купленных: {balance['paid']}\n\n"
             f"📈 <b>Статистика:</b>\n"
-            f"✅ Обработано изображений: {user.images_processed}\n"
+            f"✅ Обработано изображений: {user.total_images_processed}\n"
         )
 
         await callback.message.edit_text(text, parse_mode="HTML")
