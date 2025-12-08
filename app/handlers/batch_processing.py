@@ -324,7 +324,7 @@ async def batch_partial_handler(callback: CallbackQuery, state: FSMContext):
 
     # Process images one by one
     await process_batch_images(
-        message,
+        callback.message,
         user_id,
         images_to_process,
         len(batch_images)
