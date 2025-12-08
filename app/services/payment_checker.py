@@ -130,16 +130,15 @@ class PaymentChecker:
                         referrer = referrer_result.scalar_one_or_none()
 
                         if referrer:
-                            await bot.send_message(
-                                referrer.telegram_id,
-                                f"💰 <b>Вознаграждение от реферальной программы!</b>\n\n"
-                                f"Ваш реферал совершил покупку!\n"
-                                f"🎁 Вам начислено <b>{referral_reward}</b> бесплатных фото!\n\n"
-                                f"📦 Пакет реферала: {order.package.name} ({order.package.images_count} фото)\n"
-                                f"💵 Ваша доля: {settings.REFERRAL_REWARD_PURCHASE_PERCENT}%\n\n"
-                                f"Продолжайте делиться ссылкой и получайте еще больше! 🚀",
-                                parse_mode="HTML"
-                            )
+                    await bot.send_message(
+                        chat_id=referrer.telegram_id,
+                        text=(
+                            f"🎁 <b>Вам начислено {referral_reward} бесплатных фото!</b>\n\n"
+                            f"✨ Ваш друг купил пакет фотосессий, и вы получили вознаграждение ({settings.REFERRAL_REWARD_PURCHASE_PERCENT}%).\n\n"
+                            "📸 Продолжайте приглашать друзей и получайте больше бонусов!"
+                        ),
+                        parse_mode="HTML"
+                    )
                             logger.info(f"Referrer {referrer.telegram_id} notified about reward: {referral_reward} images")
                     except Exception as e:
                         logger.error(f"Failed to notify referrer: {str(e)}")

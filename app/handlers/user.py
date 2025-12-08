@@ -77,7 +77,7 @@ async def balance_handler(message: Message, session: AsyncSession):
         reply_markup=get_buy_packages_keyboard() if balance['total'] == 0 else None
     )
 
-@router.message(F.photo | F.document, StateFilter(None))
+@router.message(F.photo | F.document, StateFilter(None, PhotoshootStates.waiting_for_product_photo))
 async def handle_product_photo(message: Message, session: AsyncSession, state: FSMContext, bot: Bot):
     user = await get_or_create_user(session, message.from_user.id)
     
