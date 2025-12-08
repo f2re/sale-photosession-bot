@@ -2,7 +2,7 @@
 import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
-from aiogram.types import Message, CallbackQuery, InputMediaPhoto
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,37 +187,89 @@ async def apply_style(callback: CallbackQuery, state: FSMContext, session: Async
 
 @router.callback_query(F.data == "confirm_generation")
 async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
-    user = await get_or_create_user(session, callback.from_user.id)
-    if user.images_remaining < 1:
-        await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
-        return
-        
-    msg = await callback.message.edit_text("🎨 Генерирую фотосессию (4 фото)... ⏳ ~1 мин")
-    data = await state.get_data()
-    
-    res = await image_processor.generate_photoshoot(
-        data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user
-    )
-    
-    if not res["success"]:
-        await msg.edit_text(f"❌ Ошибка: {res.get('error')}")
-        return
-        
-    await update_user_images_count(session, user.id, -1)
-    
-    media = []
-    for i, img in enumerate(res["images"]):
-        if img["success"]:
-            media.append(InputMediaPhoto(media=img["image_bytes"], caption=f"Style: {img['style_name']}" if i==0 else None))
-            await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], data["aspect_ratio"])
-            
-    await msg.delete()
-    if media:
-        await callback.message.answer_media_group(media)
-        await callback.message.answer("✅ Готово!", reply_markup=get_post_generation_keyboard(user.images_remaining > 0))
-        
-    await state.update_data(last_generated=True)
-    await state.set_state(PhotoshootStates.generating_photoshoot)
+    try:
+        user = await get_or_create_user(session, callback.from_user.id)
+        if user.images_remaining < 1:
+            await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
+            return
+
+        msg = await callback.message.edit_text("🎨 Генерирую фотосессию (4 фото)... ⏳ ~1 мин")
+        data = await state.get_data()
+
+        res = await image_processor.generate_photoshoot(
+            data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user
+        )
+
+        if not res["success"]:
+            await msg.edit_text(f"❌ Ошибка: {res.get('error', 'Неизвестная ошибка')}")
+            return
+
+        # Deduct balance only if generation was successful
+        await update_user_images_count(session, user.id, -1)
+
+        media = []
+        successful_count = 0
+        failed_count = 0
+
+        for i, img in enumerate(res["images"]):
+            if img.get("success"):
+                try:
+                    # Wrap bytes in BufferedInputFile for aiogram
+                    input_file = BufferedInputFile(
+                        img["image_bytes"],
+                        filename=f"photoshoot_{i}_{img['style_name']}.png"
+                    )
+                    media.append(InputMediaPhoto(
+                        media=input_file,
+                        caption=f"Style: {img['style_name']}" if i==0 else None
+                    ))
+                    await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], data["aspect_ratio"])
+                    successful_count += 1
+                except Exception as e:
+                    logger.error(f"Error preparing image {i}: {e}", exc_info=True)
+                    failed_count += 1
+            else:
+                failed_count += 1
+
+        await msg.delete()
+
+        if media:
+            try:
+                await callback.message.answer_media_group(media)
+
+                # Create summary message
+                summary = "✅ Готово!"
+                if failed_count > 0:
+                    summary += f"\n⚠️ {failed_count} из {successful_count + failed_count} изображений не удалось сгенерировать"
+
+                await callback.message.answer(
+                    summary,
+                    reply_markup=get_post_generation_keyboard(user.images_remaining > 0)
+                )
+            except Exception as e:
+                logger.error(f"Error sending media group: {e}", exc_info=True)
+                await callback.message.answer(
+                    f"❌ Ошибка отправки изображений: {str(e)}\n"
+                    f"Сгенерировано: {successful_count}, Ошибок: {failed_count}"
+                )
+        else:
+            await callback.message.answer(
+                "❌ К сожалению, не удалось сгенерировать ни одного изображения.\n"
+                "Попробуйте еще раз или измените параметры.",
+                reply_markup=get_post_generation_keyboard(user.images_remaining > 0)
+            )
+
+        await state.update_data(last_generated=True)
+        await state.set_state(PhotoshootStates.generating_photoshoot)
+
+    except Exception as e:
+        logger.error(f"Critical error in confirm_gen: {e}", exc_info=True)
+        try:
+            await callback.message.answer(
+                "❌ Произошла критическая ошибка. Пожалуйста, попробуйте снова или обратитесь в поддержку."
+            )
+        except:
+            pass
 
 @router.callback_query(F.data == "save_style")
 async def save_style_prompt(callback: CallbackQuery, state: FSMContext):
