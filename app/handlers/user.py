@@ -16,6 +16,7 @@ from app.keyboards.inline import (
     get_confirm_save_style_keyboard,
     get_buy_packages_keyboard
 )
+from app.keyboards.user_kb import get_packages_keyboard
 from app.keyboards.reply import get_main_menu
 from app.services.prompt_generator import PromptGenerator
 from app.services.image_processor import ImageProcessor
@@ -24,7 +25,8 @@ from app.database.crud import (
     get_or_create_user,
     update_user_images_count,
     create_processed_image,
-    get_user_balance
+    get_user_balance,
+    get_all_packages
 )
 from app.config import settings
 
@@ -308,3 +310,84 @@ async def new_photoshoot(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("📸 Отправьте фото товара.")
     await state.clear()
     await state.set_state(PhotoshootStates.waiting_for_product_photo)
+
+@router.callback_query(F.data == "show_packages")
+async def show_packages(callback: CallbackQuery, session: AsyncSession):
+    """Show available packages for purchase"""
+    try:
+        packages = await get_all_packages(session)
+
+        if not packages:
+            await callback.answer("Пакеты временно недоступны", show_alert=True)
+            return
+
+        # Convert to dict format expected by keyboard
+        packages_dict = [
+            {
+                'id': p.id,
+                'name': p.name,
+                'images_count': p.images_count,
+                'price_rub': float(p.price_rub)
+            }
+            for p in packages
+        ]
+
+        text = (
+            "💎 <b>Доступные пакеты</b>\n\n"
+            "Выберите пакет для покупки:\n"
+        )
+
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_packages_keyboard(packages_dict)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error showing packages: {e}", exc_info=True)
+        await callback.answer("Ошибка загрузки пакетов", show_alert=True)
+
+@router.callback_query(F.data == "buy_package")
+async def buy_package_redirect(callback: CallbackQuery, session: AsyncSession):
+    """Redirect to show packages (alias for show_packages)"""
+    await show_packages(callback, session)
+
+@router.callback_query(F.data == "profile")
+async def show_profile(callback: CallbackQuery, session: AsyncSession):
+    """Show user profile"""
+    try:
+        user = await get_or_create_user(session, callback.from_user.id)
+        balance = await get_user_balance(session, callback.from_user.id)
+
+        text = (
+            f"👤 <b>Ваш профиль</b>\n\n"
+            f"ID: <code>{user.telegram_id}</code>\n"
+            f"Имя: {callback.from_user.full_name}\n"
+            f"Username: @{callback.from_user.username or 'не указан'}\n\n"
+            f"📊 <b>Баланс:</b>\n"
+            f"💎 Доступно фотосессий: <b>{balance['total']}</b>\n"
+            f"🆓 Бесплатных: {balance['free']}\n"
+            f"💰 Купленных: {balance['paid']}\n\n"
+            f"📈 <b>Статистика:</b>\n"
+            f"✅ Обработано изображений: {user.images_processed}\n"
+        )
+
+        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error showing profile: {e}", exc_info=True)
+        await callback.answer("Ошибка загрузки профиля", show_alert=True)
+
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: CallbackQuery, state: FSMContext):
+    """Go back to main menu"""
+    await state.clear()
+    await callback.message.edit_text(
+        "Главное меню",
+        reply_markup=None
+    )
+    await callback.message.answer(
+        "Используйте кнопки меню для навигации",
+        reply_markup=get_main_menu()
+    )
+    await callback.answer()
