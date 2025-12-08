@@ -3,6 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 
 from app.database import get_db
 from app.database.crud import (
@@ -17,6 +18,7 @@ from app.keyboards.admin_kb import (
     get_admin_menu, get_ticket_actions, get_admin_back, get_admin_cancel, get_admin_utm_menu
 )
 from app.utils.decorators import admin_only
+from app.utils.message_helpers import safe_edit_text
 
 router = Router()
 
@@ -70,8 +72,11 @@ async def admin_refresh(callback: CallbackQuery):
         f"💬 Открытых обращений: {stats['open_tickets']}"
     )
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_menu())
-    await callback.answer("✅ Обновлено")
+    was_modified = await safe_edit_text(callback.message, text, parse_mode="HTML", reply_markup=get_admin_menu())
+    if was_modified:
+        await callback.answer("✅ Обновлено")
+    else:
+        await callback.answer("✅ Данные актуальны")
 
 
 @router.callback_query(F.data == "admin_stats")
@@ -448,7 +453,7 @@ async def admin_menu_callback(callback: CallbackQuery):
         f"💬 Открытых обращений: {stats['open_tickets']}"
     )
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_menu())
+    await safe_edit_text(callback.message, text, parse_mode="HTML", reply_markup=get_admin_menu())
     await callback.answer()
 
 
