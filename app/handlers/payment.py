@@ -6,7 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from app.database import get_db
 from app.database.crud import (
     get_package_by_id, create_order, get_order_by_invoice_id,
-    mark_order_paid, get_user_orders
+    mark_order_paid
 )
 from app.services.yookassa import YookassaService
 from app.keyboards.user_kb import (
