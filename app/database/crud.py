@@ -482,3 +482,36 @@ async def get_utm_statistics(session: AsyncSession) -> List: return []
 async def get_conversion_funnel(session: AsyncSession) -> Dict: return {}
 async def get_utm_events_summary(session: AsyncSession, limit: int = 100) -> List: return []
 async def get_utm_sync_status(session: AsyncSession) -> Dict: return {'total_events': 0, 'sent_events': 0, 'pending_events': 0, 'sync_rate': 0}
+
+# ==================== BALANCE OPERATIONS (Compatibility) ====================
+
+async def check_and_reserve_balance(session: AsyncSession, telegram_id: int) -> tuple[bool, bool]:
+    """
+    Atomically check and reserve balance for image processing.
+    Returns (success, is_free).
+    For this bot, all balance is treated equally (images_remaining).
+    is_free logic is legacy but we return False unless specific logic needed.
+    """
+    result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id).with_for_update()
+    )
+    user = result.scalar_one_or_none()
+
+    if not user or user.images_remaining <= 0:
+        return False, False
+
+    user.images_remaining -= 1
+    await session.commit()
+    return True, False # Treat as paid/consumed credit
+
+async def rollback_balance(session: AsyncSession, telegram_id: int, is_free: bool):
+    """Rollback balance if processing failed"""
+    # We ignore is_free distinction for simplicity in this version
+    result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id).with_for_update()
+    )
+    user = result.scalar_one_or_none()
+
+    if user:
+        user.images_remaining += 1
+        await session.commit()
