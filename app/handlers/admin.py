@@ -386,8 +386,8 @@ async def admin_add_images_count(message: Message, state: FSMContext):
 
         # Create manual package entry
         manual_package = Package(
-            name=f"Manual {count} images",
-            images_count=count,
+            name=f"Manual {count} photoshoots",
+            photoshoots_count=count,  # Fixed: photoshoots_count, not images_count
             price_rub=0,
             is_active=False
         )
@@ -403,11 +403,16 @@ async def admin_add_images_count(message: Message, state: FSMContext):
             invoice_id=f"manual_{user.id}_{int(__import__('time').time())}"
         )
         session.add(order)
+        await session.flush()
+
+        # Manually add photoshoots to user balance
+        user.images_remaining += count
         await session.commit()
 
     await state.clear()
     await message.answer(
-        f"✅ Добавлено {count} изображений пользователю {target_user_id}"
+        f"✅ Добавлено {count} фотосессий пользователю {target_user_id}\n\n"
+        f"Теперь у пользователя доступно фотосессий: {user.images_remaining}"
     )
 
 
@@ -512,23 +517,31 @@ async def admin_utm_funnel_callback(callback: CallbackQuery):
     async with db.get_session() as session:
         funnel = await get_conversion_funnel(session)
 
-    starts = funnel['starts']
-    first_images = funnel['first_images']
-    purchases = funnel['purchases']
-    start_to_first_image_rate = funnel['start_to_first_image_rate']
-    first_image_to_purchase_rate = funnel['first_image_to_purchase_rate']
-    overall_conversion_rate = funnel['overall_conversion_rate']
+    starts = funnel.get('starts', 0)
+    first_images = funnel.get('first_images', 0)
+    purchases = funnel.get('purchases', 0)
+    start_to_first_image_rate = funnel.get('start_to_first_image_rate', 0)
+    first_image_to_purchase_rate = funnel.get('first_image_to_purchase_rate', 0)
+    overall_conversion_rate = funnel.get('overall_conversion_rate', 0)
 
-    text = (
-        "📊 <b>Воронка конверсии (UTM пользователи)</b>\n\n"
-        f"1️⃣ <b>Запуск бота</b>: {starts} чел.\n"
-        f"   ⬇️ {start_to_first_image_rate}%\n\n"
-        f"2️⃣ <b>Первое фото</b>: {first_images} чел.\n"
-        f"   ⬇️ {first_image_to_purchase_rate}%\n\n"
-        f"3️⃣ <b>Покупка</b>: {purchases} чел.\n\n"
-        f"📈 <b>Общая конверсия</b>: {overall_conversion_rate}%\n\n"
-        "<i>Учитываются только пользователи из UTM-источников</i>"
-    )
+    if starts == 0 and first_images == 0 and purchases == 0:
+        text = (
+            "📊 <b>Воронка конверсии (UTM пользователи)</b>\n\n"
+            "ℹ️ Пока нет данных о конверсии.\n\n"
+            "Данные появятся после того, как пользователи из UTM-источников "
+            "начнут использовать бота и совершать покупки."
+        )
+    else:
+        text = (
+            "📊 <b>Воронка конверсии (UTM пользователи)</b>\n\n"
+            f"1️⃣ <b>Запуск бота</b>: {starts} чел.\n"
+            f"   ⬇️ {start_to_first_image_rate}%\n\n"
+            f"2️⃣ <b>Первое фото</b>: {first_images} чел.\n"
+            f"   ⬇️ {first_image_to_purchase_rate}%\n\n"
+            f"3️⃣ <b>Покупка</b>: {purchases} чел.\n\n"
+            f"📈 <b>Общая конверсия</b>: {overall_conversion_rate}%\n\n"
+            "<i>Учитываются только пользователи из UTM-источников</i>"
+        )
 
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_back())
     await callback.answer()
@@ -723,23 +736,31 @@ async def utm_funnel_handler(message: Message):
     async with db.get_session() as session:
         funnel = await get_conversion_funnel(session)
 
-    starts = funnel['starts']
-    first_images = funnel['first_images']
-    purchases = funnel['purchases']
-    start_to_first_image_rate = funnel['start_to_first_image_rate']
-    first_image_to_purchase_rate = funnel['first_image_to_purchase_rate']
-    overall_conversion_rate = funnel['overall_conversion_rate']
+    starts = funnel.get('starts', 0)
+    first_images = funnel.get('first_images', 0)
+    purchases = funnel.get('purchases', 0)
+    start_to_first_image_rate = funnel.get('start_to_first_image_rate', 0)
+    first_image_to_purchase_rate = funnel.get('first_image_to_purchase_rate', 0)
+    overall_conversion_rate = funnel.get('overall_conversion_rate', 0)
 
-    text = (
-        "📊 <b>Воронка конверсии (UTM пользователи)</b>\n\n"
-        f"1️⃣ <b>Запуск бота</b>: {starts} чел.\n"
-        f"   ⬇️ {start_to_first_image_rate}%\n\n"
-        f"2️⃣ <b>Первое фото</b>: {first_images} чел.\n"
-        f"   ⬇️ {first_image_to_purchase_rate}%\n\n"
-        f"3️⃣ <b>Покупка</b>: {purchases} чел.\n\n"
-        f"📈 <b>Общая конверсия</b>: {overall_conversion_rate}%\n\n"
-        "<i>Учитываются только пользователи из UTM-источников</i>"
-    )
+    if starts == 0 and first_images == 0 and purchases == 0:
+        text = (
+            "📊 <b>Воронка конверсии (UTM пользователи)</b>\n\n"
+            "ℹ️ Пока нет данных о конверсии.\n\n"
+            "Данные появятся после того, как пользователи из UTM-источников "
+            "начнут использовать бота и совершать покупки."
+        )
+    else:
+        text = (
+            "📊 <b>Воронка конверсии (UTM пользователи)</b>\n\n"
+            f"1️⃣ <b>Запуск бота</b>: {starts} чел.\n"
+            f"   ⬇️ {start_to_first_image_rate}%\n\n"
+            f"2️⃣ <b>Первое фото</b>: {first_images} чел.\n"
+            f"   ⬇️ {first_image_to_purchase_rate}%\n\n"
+            f"3️⃣ <b>Покупка</b>: {purchases} чел.\n\n"
+            f"📈 <b>Общая конверсия</b>: {overall_conversion_rate}%\n\n"
+            "<i>Учитываются только пользователи из UTM-источников</i>"
+        )
 
     await message.answer(text, parse_mode="HTML")
 
