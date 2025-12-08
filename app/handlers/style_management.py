@@ -3,7 +3,7 @@ Style Management Handlers
 """
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,16 +20,55 @@ router = Router()
 async def show_style_management(callback: CallbackQuery, session: AsyncSession):
     await callback.answer()
     styles = await StyleManager.get_user_styles(session, callback.from_user.id)
-    
+
     if not styles:
         await callback.message.edit_text("📁 Нет сохраненных стилей.")
         return
-    
-    text = "\n".join([f"{i+1}. <b>{s['name']}</b>" for i, s in enumerate(styles)])
+
+    # Create custom keyboard for management (not application)
+    buttons = []
+    for style in styles:
+        text = f"{style['name']} ({style['aspect_ratio']})"
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"manage_style:{style['id']}"
+        )])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    text_list = "\n".join([f"{i+1}. <b>{s['name']}</b> ({s['aspect_ratio']})" for i, s in enumerate(styles)])
     await callback.message.edit_text(
-        f"📁 <b>Управление ({len(styles)}/{settings.MAX_SAVED_STYLES}):</b>\n\n{text}\n\nВыберите стиль:",
-        reply_markup=get_style_management_keyboard(styles), parse_mode="HTML"
+        f"📁 <b>Управление стилями ({len(styles)}/{settings.MAX_SAVED_STYLES}):</b>\n\n{text_list}\n\nВыберите стиль для управления:",
+        reply_markup=keyboard, parse_mode="HTML"
     )
+
+@router.callback_query(F.data.startswith("manage_style:"))
+async def show_style_options(callback: CallbackQuery, session: AsyncSession):
+    """Show management options for a specific style"""
+    pid = int(callback.data.split(":")[1])
+
+    # Get style details
+    styles = await StyleManager.get_user_styles(session, callback.from_user.id)
+    style = next((s for s in styles if s['id'] == pid), None)
+
+    if not style:
+        await callback.answer("Стиль не найден", show_alert=True)
+        return
+
+    text = (
+        f"📝 <b>Управление стилем</b>\n\n"
+        f"Название: <b>{style['name']}</b>\n"
+        f"Пропорции: {style['aspect_ratio']}\n\n"
+        f"Выберите действие:"
+    )
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_style_management_keyboard(pid)
+    )
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("delete_style:"))
 async def delete_style(callback: CallbackQuery, session: AsyncSession):
