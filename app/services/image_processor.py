@@ -1,139 +1,105 @@
+"""
+Image Processor Service
+"""
 import logging
+import asyncio
 from io import BytesIO
-from typing import Dict
+from typing import Dict, List
 from PIL import Image
 from aiogram import Bot
 
 from app.database.models import User
-from app.services.openrouter import OpenRouterService
+from app.services.nanobanana import NanoBananaService
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
-
 class ImageProcessor:
-    """Service for processing images (Portrait Generation)"""
-
     def __init__(self):
-        self.openrouter_service = OpenRouterService()
-
+        self.nanobanana = NanoBananaService()
+    
     def _convert_webp_to_png(self, image_bytes: bytes) -> bytes:
-        """
-        Convert WebP image to PNG format in memory (on-the-fly conversion).
-
-        Args:
-            image_bytes: WebP image bytes
-
-        Returns:
-            PNG image bytes
-        """
         try:
             img = Image.open(BytesIO(image_bytes))
-
-            # Convert to RGB if needed (some WebP images have RGBA mode)
             if img.mode in ('RGBA', 'LA', 'P'):
-                # Keep alpha channel for transparent images
-                if img.mode == 'P' and 'transparency' in img.info:
-                    img = img.convert('RGBA')
-                elif img.mode != 'RGBA':
-                    img = img.convert('RGBA')
-            elif img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGBA')
+            else:
                 img = img.convert('RGB')
-
-            # Save as PNG to BytesIO (in memory, no disk I/O)
             output = BytesIO()
             img.save(output, format='PNG', optimize=True)
-            output.seek(0)
-
-            png_bytes = output.getvalue()
-            logger.info(f"Converted WebP to PNG: {len(image_bytes)} bytes → {len(png_bytes)} bytes")
-            return png_bytes
-
+            return output.getvalue()
         except Exception as e:
-            logger.error(f"Error converting WebP to PNG: {str(e)}")
+            logger.error(f"WebP conversion error: {e}")
             raise
-
-    async def process_image(
+    
+    async def generate_photoshoot(
         self,
-        image_bytes: bytes,
+        product_image_bytes: bytes,
+        styles: List[Dict],
+        aspect_ratio: str,
         bot: Bot,
-        user: User,
-        use_transparent_bg: bool = False  # Kept for compatibility with handler signature, but ignored or used for quality
+        user: User
     ) -> Dict:
-        """
-        Process image to generate business portrait
-
-        Args:
-            image_bytes: Input image bytes
-            bot: Bot instance for sending notifications
-            user: User object
-            use_transparent_bg: Ignored in this version
-
-        Returns:
-            dict with keys: success (bool), image_bytes (bytes), error (str)
-        """
-        service_name = "OpenRouter"
         try:
-            logger.info(f"Processing image for user {user.telegram_id}")
-
-            # Validate input image and convert WebP if needed
+            logger.info(f"Starting photoshoot for {user.telegram_id}")
+            
+            # Convert if needed
             try:
-                img = Image.open(BytesIO(image_bytes))
-                width, height = img.size
-                original_format = img.format
-                logger.info(f"Input image: {width}x{height}, format: {original_format}, mode: {img.mode}")
-
-                # Convert WebP to PNG on-the-fly (in memory)
-                if original_format and original_format.upper() == 'WEBP':
-                    logger.info("WebP format detected, converting to PNG...")
-                    image_bytes = self._convert_webp_to_png(image_bytes)
-                    logger.info("WebP → PNG conversion completed")
-
+                img = Image.open(BytesIO(product_image_bytes))
+                if img.format and img.format.upper() == 'WEBP':
+                    product_image_bytes = self._convert_webp_to_png(product_image_bytes)
             except Exception as e:
-                logger.error(f"Invalid image format for user {user.telegram_id}: {str(e)}")
-                return {
-                    "success": False,
-                    "image_bytes": None,
-                    "error": "Неподдерживаемый формат изображения"
-                }
-
-            # Use OpenRouter for business portrait generation
-            logger.info(f"Using OpenRouter for business portrait generation (user: {user.telegram_id})")
-            result = await self.openrouter_service.generate_business_portrait(image_bytes)
-
-            if result["success"]:
-                logger.info(f"Image processing completed successfully for user {user.telegram_id}")
-            else:
-                error_message = result.get("error", "Unknown error")
-                logger.error(f"Image processing failed for user {user.telegram_id} with service {service_name}: {error_message}")
-                # Notify admins on failure
+                return {"success": False, "error": "Invalid image format"}
+            
+            tasks = [
+                self._generate_single_variant(
+                    product_image_bytes, s["prompt"], s["style_name"], aspect_ratio
+                ) for s in styles
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            images = []
+            successful_count = 0
+            
+            for i, (res, style) in enumerate(zip(results, styles)):
+                if isinstance(res, Exception) or not res.get("success"):
+                    err = str(res) if isinstance(res, Exception) else res.get("error")
+                    images.append({
+                        "success": False,
+                        "style_name": style["style_name"],
+                        "prompt": style["prompt"],
+                        "error": err
+                    })
+                else:
+                    images.append({
+                        **res,
+                        "style_name": style["style_name"],
+                        "prompt": style["prompt"]
+                    })
+                    successful_count += 1
+            
+            if successful_count < 4:
                 await NotificationService.notify_admins_processing_error(
-                    bot=bot,
-                    user_telegram_id=user.telegram_id,
-                    username=user.username,
-                    service_name=service_name,
-                    error_message=error_message
+                    bot, user.telegram_id, user.username, "NanoBanana",
+                    f"Failed {4-successful_count}/4 images"
                 )
-
-            return result
-
-        except Exception as e:
-            error_message = str(e)
-            logger.error(f"Critical error in process_image for user {user.telegram_id} with service {service_name}: {error_message}", exc_info=True)
-            # Notify admins on critical failure
-            await NotificationService.notify_admins_processing_error(
-                bot=bot,
-                user_telegram_id=user.telegram_id,
-                username=user.username,
-                service_name=service_name,
-                error_message=error_message
-            )
+            
             return {
-                "success": False,
-                "image_bytes": None,
-                "error": "Произошла внутренняя ошибка. Мы уже уведомлены и скоро все исправим."
+                "success": successful_count > 0,
+                "images": images,
+                "successful_count": successful_count,
+                "error": None if successful_count > 0 else "All generations failed"
             }
+            
+        except Exception as e:
+            logger.error(f"Critical error: {e}", exc_info=True)
+            return {"success": False, "error": "Internal processing error"}
 
-    async def test_service(self) -> bool:
-        """Test if API service is available"""
-        return await self.openrouter_service.test_connection()
+    async def _generate_single_variant(self, img_bytes, prompt, style_name, ratio):
+        try:
+            return await self.nanobanana.generate_image(
+                prompt=prompt, reference_image_bytes=img_bytes, aspect_ratio=ratio
+            )
+        except Exception as e:
+            return {"success": False, "error": str(e)}
