@@ -127,27 +127,23 @@ async def referral_handler(message: Message, session: AsyncSession, bot: Bot):
         user.referral_code = str(user.telegram_id) # Simple code = telegram_id
         await session.commit()
     
-    # Get stats (this would ideally be a DB query aggregating rewards)
-    # For now, using the fields we have
+    # Get stats
     referrals_count = user.total_referrals
     
-    # Calculate earnings (mock logic or real if table exists)
-    # In real app: query ReferralReward where user_id=user.id
-    # For now, we display what we store
-    
     bot_info = await bot.get_me()
+    referral_link = f"https://t.me/{bot_info.username}?start=ref_{user.referral_code}"
     
     await message.answer(
         f"👥 <b>Реферальная программа</b>\n\n"
         f"Приглашайте друзей и получайте бонусы!\n\n"
         f"🔗 <b>Ваша статистика:</b>\n"
         f"👥 Приглашено друзей: <b>{referrals_count}</b>\n"
-        # f"💰 Заработано фотосессий: <b>{user.referral_balance}</b>\n" # If we had this field
         f"\n"
         f"🎁 <b>Бонусы:</b>\n"
         f"• +{settings.REFERRAL_REWARD_START} фотосессия за каждого друга\n"
         f"• {settings.REFERRAL_REWARD_PURCHASE_PERCENT}% от их покупок\n\n"
-        f"👇 <b>Ваша ссылка для приглашения:</b>",
+        f"👇 <b>Ваша ссылка для приглашения:</b>\n"
+        f"<code>{referral_link}</code>",
         parse_mode="HTML",
         reply_markup=get_referral_menu(bot_info.username, user.referral_code)
     )
