@@ -167,6 +167,9 @@ class PaymentChecker:
 
         Returns:
             Payment status ('succeeded', 'canceled', 'pending', or None if timeout)
+
+        Raises:
+            asyncio.CancelledError: If task is cancelled by user
         """
         check_intervals = [60, 30, 60]  # First checks: 1min, 30sec, 1min
         remaining_checks_interval = 30  # Then every 30 seconds
@@ -174,49 +177,54 @@ class PaymentChecker:
         start_time = datetime.utcnow()
         max_duration = timedelta(minutes=max_duration_minutes)
 
-        # Perform scheduled checks
-        for interval in check_intervals:
-            await asyncio.sleep(interval)
+        try:
+            # Perform scheduled checks
+            for interval in check_intervals:
+                await asyncio.sleep(interval)
 
-            # Check if max duration exceeded
-            if datetime.utcnow() - start_time > max_duration:
-                logger.info(f"Payment check timeout for {payment_id}")
-                return None
+                # Check if max duration exceeded
+                if datetime.utcnow() - start_time > max_duration:
+                    logger.info(f"Payment check timeout for {payment_id}")
+                    return None
 
-            payment_info = await self.check_payment_status(payment_id)
+                payment_info = await self.check_payment_status(payment_id)
 
-            if not payment_info:
-                continue
+                if not payment_info:
+                    continue
 
-            status = payment_info['status']
+                status = payment_info['status']
 
-            if status == 'succeeded' and payment_info.get('paid'):
-                # Payment successful!
-                await self.process_successful_payment(payment_id, bot, user_telegram_id)
-                return 'succeeded'
+                if status == 'succeeded' and payment_info.get('paid'):
+                    # Payment successful!
+                    await self.process_successful_payment(payment_id, bot, user_telegram_id)
+                    return 'succeeded'
 
-            elif status == 'canceled':
-                logger.info(f"Payment {payment_id} was canceled")
-                return 'canceled'
+                elif status == 'canceled':
+                    logger.info(f"Payment {payment_id} was canceled")
+                    return 'canceled'
 
-        # Continue checking every 30 seconds until timeout
-        while datetime.utcnow() - start_time < max_duration:
-            await asyncio.sleep(remaining_checks_interval)
+            # Continue checking every 30 seconds until timeout
+            while datetime.utcnow() - start_time < max_duration:
+                await asyncio.sleep(remaining_checks_interval)
 
-            payment_info = await self.check_payment_status(payment_id)
+                payment_info = await self.check_payment_status(payment_id)
 
-            if not payment_info:
-                continue
+                if not payment_info:
+                    continue
 
-            status = payment_info['status']
+                status = payment_info['status']
 
-            if status == 'succeeded' and payment_info.get('paid'):
-                await self.process_successful_payment(payment_id, bot, user_telegram_id)
-                return 'succeeded'
+                if status == 'succeeded' and payment_info.get('paid'):
+                    await self.process_successful_payment(payment_id, bot, user_telegram_id)
+                    return 'succeeded'
 
-            elif status == 'canceled':
-                return 'canceled'
+                elif status == 'canceled':
+                    return 'canceled'
 
-        # Timeout reached
-        logger.info(f"Payment check timeout for {payment_id} after {max_duration_minutes} minutes")
-        return None
+            # Timeout reached
+            logger.info(f"Payment check timeout for {payment_id} after {max_duration_minutes} minutes")
+            return None
+
+        except asyncio.CancelledError:
+            logger.info(f"Payment check for {payment_id} cancelled by user")
+            raise  # Re-raise to propagate cancellation

@@ -71,10 +71,15 @@ class NanoBananaService:
                 "Follow the requested style, lighting, and composition."
             )
 
+            # Convert aspect ratio to format accepted by API (e.g., "1:1" -> "1:1")
+            # Some models might need "1024x1024" format, but let's try the ratio format first
+            aspect_ratio_param = aspect_ratio if ":" in aspect_ratio else "1:1"
+
             # Payload for chat completion with image output
             payload = {
                 "model": self.model,
                 "modalities": ["text", "image"],  # Required for image generation
+                "aspectRatio": aspect_ratio_param,  # Add aspect ratio as API parameter
                 "messages": [
                     {
                         "role": "system",
@@ -86,7 +91,7 @@ class NanoBananaService:
                             {
                                 "type": "text",
                                 "text": f"Generate an image of this product based on this description: {prompt}. "
-                                        f"Aspect Ratio: {aspect_ratio}. "
+                                        f"IMPORTANT: Image must be in {aspect_ratio_param} aspect ratio. "
                                         f"Keep the product look consistent with the reference."
                             },
                             {
