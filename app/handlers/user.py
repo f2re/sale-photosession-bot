@@ -403,6 +403,7 @@ async def save_style_prompt(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(PhotoshootStates.saving_style_name))
 async def save_style_name(message: Message, state: FSMContext, session: AsyncSession):
+    logger.info(f"User {message.from_user.id} saving style name: {message.text}")
     name = message.text
     if len(name) > 30:
         await message.answer("⚠️ Название слишком длинное. Максимум 30 символов.")
@@ -419,6 +420,7 @@ async def save_style_name(message: Message, state: FSMContext, session: AsyncSes
     styles_to_save = data.get("styles")
     
     if not styles_to_save:
+        logger.error("No styles found in state during save")
         await message.answer("❌ Ошибка: данные стиля потеряны.")
         await state.clear()
         return
@@ -432,6 +434,7 @@ async def save_style_name(message: Message, state: FSMContext, session: AsyncSes
         markup = get_post_generation_keyboard(True) if data.get("last_generated") else get_style_selection_keyboard()
         await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
     else:
+        logger.error(f"Failed to save style: {res['error']}")
         await message.answer(f"❌ Ошибка: {res['error']}")
     
     # Don't clear state completely if we want to allow "Create more", 
@@ -444,6 +447,13 @@ async def save_style_name(message: Message, state: FSMContext, session: AsyncSes
         await state.set_state(PhotoshootStates.generating_photoshoot)
     else:
         await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+
+@router.callback_query(F.data == "cancel_action")
+async def cancel_handler(callback: CallbackQuery, state: FSMContext):
+    """Handle generic cancel action"""
+    await state.clear()
+    await callback.message.edit_text("❌ Действие отменено.")
+    await callback.answer()
 
 def _format_styles_preview(styles):
     return "\n\n".join([f"{i+1}. <b>{s['style_name']}</b>" for i, s in enumerate(styles)])

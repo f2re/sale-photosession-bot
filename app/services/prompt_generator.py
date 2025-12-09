@@ -415,10 +415,15 @@ Be maximally creative! Use different:
             }
         """
         try:
-            user_prompt = f"""Product: {product_description}
+            # Handle generic description
+            product_text = product_description
+            if product_description.lower() in ["product image", "product from image"]:
+                product_text = "A high-end commercial product"
+                
+            user_prompt = f"""Product: {product_text}
 Aspect Ratio: {aspect_ratio}
 
-{"Create 4 RANDOM, maximally DIFFERENT and CREATIVE styles!" if random else "Create 4 classic professional styles for this product."}
+{"Create 4 RANDOM, maximally DIFFERENT and CREATIVE styles with various angles and lighting!" if random else "Create 4 distinct professional styles (Lifestyle, Studio, Creative, Minimalist) with diverse lighting and angles."}
 
 Return result STRICTLY in JSON format."""
 
@@ -446,7 +451,7 @@ Return result STRICTLY in JSON format."""
                 "response_format": {"type": "json_object"}
             }
             
-            logger.info(f"Generating {'random' if random else 'analyzed'} styles for: {product_description[:50]}")
+            logger.info(f"Generating {'random' if random else 'analyzed'} styles for: {product_text[:50]}")
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -512,19 +517,31 @@ Return result STRICTLY in JSON format."""
             "styles": [
                 {
                     "style_name": "Lifestyle",
-                    "prompt": f"Professional lifestyle product photography, in use by person, natural environment, warm natural lighting, candid moment, aspect ratio {aspect_ratio}, shot on Canon EOS R5, 50mm f/1.8, shallow depth of field, authentic feel, high-end commercial quality"
+                    "prompt": f"Professional lifestyle product photography of {product}, in use by person, natural environment, warm natural lighting, candid moment, aspect ratio {aspect_ratio}, shot on Canon EOS R5, 50mm f/1.8, shallow depth of field, authentic feel, high-end commercial quality",
+                    "tech": "Canon EOS R5, 50mm f/1.8 | Warm natural lighting",
+                    "logic": "Creates an authentic, relatable atmosphere for the product.",
+                    "score": "Realism 9/10 | Minimalism 8/10 | Mood 9/10"
                 },
                 {
                     "style_name": "Студийная",
-                    "prompt": f"Clean studio product shot, pure white background, professional studio lighting setup with softboxes, sharp focus on every detail, ultra high resolution 8k, aspect ratio {aspect_ratio}, Sony A7IV, 85mm f/1.4 macro, minimal shadows, e-commerce photography, product catalog quality"
+                    "prompt": f"Clean studio product shot of {product}, pure white background, professional studio lighting setup with softboxes, sharp focus on every detail, ultra high resolution 8k, aspect ratio {aspect_ratio}, Sony A7IV, 85mm f/1.4 macro, minimal shadows, e-commerce photography, product catalog quality",
+                    "tech": "Sony A7IV, 85mm f/1.4 macro | Softbox studio lighting",
+                    "logic": "Focuses entirely on product details and clarity for e-commerce.",
+                    "score": "Realism 10/10 | Minimalism 10/10 | Mood 7/10"
                 },
                 {
                     "style_name": "Интерьер",
-                    "prompt": f"Product elegantly placed in modern minimalist interior, natural window light creating soft shadows, contemporary home setting, aspect ratio {aspect_ratio}, architectural photography style, Fujifilm GFX 100S, 35mm f/2, ambient atmosphere, lifestyle magazine quality"
+                    "prompt": f"Product {product} elegantly placed in modern minimalist interior, natural window light creating soft shadows, contemporary home setting, aspect ratio {aspect_ratio}, architectural photography style, Fujifilm GFX 100S, 35mm f/2, ambient atmosphere, lifestyle magazine quality",
+                    "tech": "Fujifilm GFX 100S, 35mm f/2 | Natural window light",
+                    "logic": "Places product in a desirable, modern home context.",
+                    "score": "Realism 9/10 | Minimalism 9/10 | Mood 8/10"
                 },
                 {
                     "style_name": "Креативная",
-                    "prompt": f"Creative conceptual photography, artistic composition with dynamic angles, vibrant color palette, dramatic studio lighting, aspect ratio {aspect_ratio}, fashion editorial style, Phase One XF, 80mm f/2.8, cinematic mood, advertising campaign quality, bold visual statement"
+                    "prompt": f"Creative conceptual photography of {product}, artistic composition with dynamic angles, vibrant color palette, dramatic studio lighting, aspect ratio {aspect_ratio}, fashion editorial style, Phase One XF, 80mm f/2.8, cinematic mood, advertising campaign quality, bold visual statement",
+                    "tech": "Phase One XF, 80mm f/2.8 | Dramatic studio lighting",
+                    "logic": "Eye-catching and memorable visual statement for advertising.",
+                    "score": "Realism 8/10 | Minimalism 7/10 | Mood 10/10"
                 }
             ],
             "error": None
