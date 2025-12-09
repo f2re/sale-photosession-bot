@@ -16,8 +16,7 @@ from app.keyboards.inline import (
     get_confirm_save_style_keyboard,
     get_buy_packages_keyboard
 )
-from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu, get_cancel_keyboard
-from app.keyboards.reply import get_main_menu
+from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu, get_cancel_keyboard, get_main_menu
 from app.services.prompt_generator import PromptGenerator
 from app.services.image_processor import ImageProcessor
 from app.services.style_manager import StyleManager
@@ -165,7 +164,7 @@ async def copy_referral_handler(callback: CallbackQuery):
     await callback.message.answer(f"<code>{link}</code>", parse_mode="HTML")
 
 @router.message(F.text == "ℹ️ Информация")
-async def info_handler(message: Message):
+def info_handler(message: Message):
     from app.keyboards.user_kb import get_info_menu
     await message.answer(
         "ℹ️ <b>Информация</b>\n\n"
@@ -174,7 +173,7 @@ async def info_handler(message: Message):
         reply_markup=get_info_menu()
     )
 
-@router.message(F.text == "📊 Баланс")
+@router.message(F.text == "📊 Мой баланс")
 async def balance_handler(message: Message, session: AsyncSession):
     balance = await get_user_balance(session, message.from_user.id)
     await message.answer(
