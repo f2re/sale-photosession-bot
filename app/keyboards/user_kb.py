@@ -1,7 +1,6 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from typing import List
 
-
 def get_main_menu() -> ReplyKeyboardMarkup:
     """Get main menu keyboard"""
     keyboard = ReplyKeyboardMarkup(
@@ -16,6 +15,28 @@ def get_main_menu() -> ReplyKeyboardMarkup:
     return keyboard
 
 
+def declension_photosessions(number: int) -> str:
+    """
+    Returns the correct declension of 'фотосессия' based on the number.
+
+    Args:
+        number: The number of photosessions
+
+    Returns:
+        String: 'фотосессия', 'фотосессии' or 'фотосессий'
+    """
+    n = number % 100
+    n1 = n % 10
+
+    if n > 10 and n < 20:
+        return "фотосессий"
+    if n1 > 1 and n1 < 5:
+        return "фотосессии"
+    if n1 == 1:
+        return "фотосессия"
+
+    return "фотосессий"
+
 def get_packages_keyboard(packages: List[dict]) -> InlineKeyboardMarkup:
     """
     Get packages selection keyboard
@@ -29,15 +50,25 @@ def get_packages_keyboard(packages: List[dict]) -> InlineKeyboardMarkup:
     buttons = []
 
     for package in packages:
+        count = package['images_count']
+        price = package['price_rub']
+
         # Calculate discount if applicable
-        base_price = 20  # Base price per image in rubles
-        actual_price_per_image = package['price_rub'] / package['images_count']
-        discount = int((1 - actual_price_per_image / base_price) * 100)
+        # Base price assumption from your code (100 rub/image)
+        base_price = 100
+        if count > 0:
+            actual_price_per_image = price / count
+            discount = int((1 - actual_price_per_image / base_price) * 100)
+        else:
+            discount = 0
+
+        # Get correct word form
+        word_form = declension_photosessions(count)
 
         if discount > 0:
-            text = f"💰 {package['images_count']} изображений - {package['price_rub']}₽ (скидка {discount}%)"
+            text = f"💰 {count} {word_form} — {price}₽ (скидка {discount}%)"
         else:
-            text = f"💰 {package['images_count']} изображений - {package['price_rub']}₽"
+            text = f"💰 {count} {word_form} — {price}₽"
 
         buttons.append([InlineKeyboardButton(
             text=text,
@@ -47,6 +78,7 @@ def get_packages_keyboard(packages: List[dict]) -> InlineKeyboardMarkup:
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 
 def get_info_menu() -> InlineKeyboardMarkup:
@@ -173,16 +205,16 @@ def get_contact_skip_keyboard() -> InlineKeyboardMarkup:
 def get_referral_menu(bot_username: str, referral_code: str) -> InlineKeyboardMarkup:
     """
     Get referral program menu keyboard
-    
+
     Args:
         bot_username: Bot's username (without @)
         referral_code: User's referral code
-    
+
     Returns:
         InlineKeyboardMarkup with referral options
     """
     referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
-    
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
