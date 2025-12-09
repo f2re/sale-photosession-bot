@@ -9,10 +9,10 @@ def get_aspect_ratio_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     ratios = {
         "1:1": "□ Квадрат (Instagram)",
-        "3:4": "▭ Вертикаль (Stories)",
-        "4:3": "▭ Горизонталь",
-        "16:9": "▬ Широкий (YouTube)",
-        "9:16": "▮ Вертикальный (TikTok)"
+        "3:4": "◭ Вертикаль (Stories)",
+        "4:3": "◭ Горизонталь",
+        "16:9": "◬ Широкий (YouTube)",
+        "9:16": "◮ Вертикальный (TikTok)"
     }
     for ratio, label in ratios.items():
         builder.button(text=label, callback_data=f"aspect_ratio:{ratio}")
@@ -20,22 +20,42 @@ def get_aspect_ratio_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def get_style_selection_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for selecting style generation method"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🎨 Проанализировать товар", callback_data="styles:analyze")
     builder.button(text="🎲 Случайные стили", callback_data="styles:random")
+    builder.button(text="✍️ Задать свой стиль", callback_data="styles:custom")  # NEW
     builder.button(text="📁 Мои сохранённые стили", callback_data="styles:saved")
     builder.button(text="🔙 Назад", callback_data="back_to_ratio")
     builder.adjust(1)
     return builder.as_markup()
 
-def get_style_preview_keyboard(can_save: bool = True) -> InlineKeyboardMarkup:
+def get_style_preview_keyboard(can_save: bool = True, product_name: str = None) -> InlineKeyboardMarkup:
+    """Keyboard for style preview with option to edit product name"""
     builder = InlineKeyboardBuilder()
+    
+    # Add edit product name button if product name is provided
+    if product_name:
+        builder.button(text=f"✏️ Изменить товар: {product_name[:20]}...", callback_data="edit_product_name")  # NEW
+    
     builder.button(text="✅ Создать фотосессию", callback_data="confirm_generation")
     builder.button(text="🔄 Другие случайные стили", callback_data="styles:random")
+    
     if can_save:
         builder.button(text="💾 Сохранить этот стиль", callback_data="save_style")
+    
     builder.button(text="🔙 Назад", callback_data="back_to_style_selection")
     builder.adjust(1)
+    return builder.as_markup()
+
+def get_image_count_keyboard(max_count: int = 4) -> InlineKeyboardMarkup:
+    """Keyboard for selecting number of images to generate (NEW)"""
+    builder = InlineKeyboardBuilder()
+    for i in range(1, max_count + 1):
+        emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"][i-1] if i <= 4 else str(i)
+        builder.button(text=f"{emoji} {i} изображений", callback_data=f"image_count:{i}")
+    builder.button(text="❌ Отмена", callback_data="cancel_custom_style")
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 def get_saved_styles_keyboard(styles: List[Dict]) -> InlineKeyboardMarkup:
