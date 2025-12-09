@@ -10,11 +10,23 @@ class PhotoshootStates(StatesGroup):
     # Selecting aspect ratio
     selecting_aspect_ratio = State()
     
-    # Selecting style method (analyze/random/saved)
+    # Selecting style method (analyze/random/saved/custom)
     selecting_styles_method = State()
     
-    # Reviewing suggested/generated styles
+    # Reviewing suggested/generated styles (with option to edit product name)
     reviewing_suggested_styles = State()
+    
+    # Editing product name
+    editing_product_name = State()
+    
+    # Creating custom style - waiting for product description
+    custom_style_product = State()
+    
+    # Creating custom style - waiting for style description
+    custom_style_description = State()
+    
+    # Creating custom style - waiting for image count
+    custom_style_count = State()
     
     # Generating photoshoot (processing)
     generating_photoshoot = State()
