@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     ]
     
     # Logging
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = "DEBUG"
     
     # Yandex Metrika (optional)
     YANDEX_METRIKA_COUNTER_ID: Optional[str] = None
