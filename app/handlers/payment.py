@@ -1,7 +1,11 @@
-from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message
+import logging
+import asyncio
+import time
+from aiogram import Router, F, Bot
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.database.crud import (
@@ -17,6 +21,7 @@ from app.keyboards.user_kb import (
 from app.utils.validators import validate_email, normalize_phone_number
 from app.utils.validators import validate_package_id
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 
@@ -27,15 +32,16 @@ class PaymentStates(StatesGroup):
 
 
 @router.callback_query(F.data.startswith("buy_package:"))
-async def buy_package_handler(callback: CallbackQuery, state: FSMContext):
+async def buy_package_handler(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """Handle package purchase request - start contact collection flow"""
-    package_id = int(callback.data.split(":")[1])
+    try:
+        package_id = int(callback.data.split(":")[1])
+        logger.info(f"User {callback.from_user.id} requested package {package_id}")
 
-    db = get_db()
-    async with db.get_session() as session:
         package = await get_package_by_id(session, package_id)
 
         if not package:
+            logger.warning(f"Package {package_id} not found")
             await callback.answer("❌ Пакет не найден", show_alert=True)
             return
 
@@ -73,21 +79,32 @@ async def buy_package_handler(callback: CallbackQuery, state: FSMContext):
             "Выберите удобный способ:",
             reply_markup=get_payment_contact_keyboard()
         )
+        await callback.answer()
 
-    await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in buy_package_handler: {e}", exc_info=True)
+        await callback.answer("❌ Произошла ошибка", show_alert=True)
+        try:
+            await callback.message.answer("❌ Произошла ошибка при выборе пакета. Пожалуйста, попробуйте позже.")
+        except:
+            pass
 
 
 @router.message(PaymentStates.waiting_for_contact, F.contact)
-async def process_contact_shared(message: Message, state: FSMContext):
+async def process_contact_shared(message: Message, state: FSMContext, session: AsyncSession):
     """Handle phone contact shared by user"""
-    phone = message.contact.phone_number
+    try:
+        phone = message.contact.phone_number
 
-    # Normalize phone number to YooKassa format
-    normalized_phone = normalize_phone_number(phone)
+        # Normalize phone number to YooKassa format
+        normalized_phone = normalize_phone_number(phone)
 
-    # Save to state and proceed to payment creation
-    await state.update_data(user_phone=normalized_phone)
-    await create_payment_with_contact(message, state)
+        # Save to state and proceed to payment creation
+        await state.update_data(user_phone=normalized_phone)
+        await create_payment_with_contact(message, state, session)
+    except Exception as e:
+        logger.error(f"Error in process_contact_shared: {e}", exc_info=True)
+        await message.answer("❌ Произошла ошибка. Попробуйте снова.")
 
 
 @router.message(PaymentStates.waiting_for_contact, F.text == "📧 Через Email")
@@ -105,39 +122,39 @@ async def request_manual_email(message: Message, state: FSMContext):
 
 
 @router.message(PaymentStates.waiting_for_email, F.text)
-async def process_manual_email(message: Message, state: FSMContext):
+async def process_manual_email(message: Message, state: FSMContext, session: AsyncSession):
     """Handle manual email input and validation"""
-    email = message.text.strip()
+    try:
+        email = message.text.strip()
 
-    # Validate email format
-    if not validate_email(email):
-        await message.answer(
-            "❌ <b>Неверный формат email</b>\n\n"
-            "Пожалуйста, введите корректный email адрес.\n\n"
-            "Пример: example@mail.ru",
-            parse_mode="HTML",
-            reply_markup=get_contact_skip_keyboard()
-        )
-        return
+        # Validate email format
+        if not validate_email(email):
+            await message.answer(
+                "❌ <b>Неверный формат email</b>\n\n"
+                "Пожалуйста, введите корректный email адрес.\n\n"
+                "Пример: example@mail.ru",
+                parse_mode="HTML",
+                reply_markup=get_contact_skip_keyboard()
+            )
+            return
 
-    # Save to state and proceed to payment creation
-    await state.update_data(user_email=email)
-    await create_payment_with_contact(message, state)
+        # Save to state and proceed to payment creation
+        await state.update_data(user_email=email)
+        await create_payment_with_contact(message, state, session)
+    except Exception as e:
+        logger.error(f"Error in process_manual_email: {e}", exc_info=True)
+        await message.answer("❌ Произошла ошибка. Попробуйте снова.")
 
 
-async def create_payment_with_contact(message: Message, state: FSMContext):
+async def create_payment_with_contact(message: Message, state: FSMContext, session: AsyncSession):
     """
     Create payment with collected contact info
 
     Args:
         message: Message instance to reply to
         state: FSM context with package and contact data
+        session: Database session
     """
-    import time
-    import logging
-    from aiogram.types import ReplyKeyboardRemove
-
-    logger = logging.getLogger(__name__)
     data = await state.get_data()
 
     package_id = data.get("package_id")
@@ -157,8 +174,7 @@ async def create_payment_with_contact(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    db = get_db()
-    async with db.get_session() as session:
+    try:
         package = await get_package_by_id(session, package_id)
 
         if not package:
@@ -235,8 +251,6 @@ async def create_payment_with_contact(message: Message, state: FSMContext):
             )
 
             # Start automatic payment checking in background
-            import asyncio
-            from aiogram import Bot
             from app.services.payment_checker import PaymentChecker
 
             # Get bot instance from message
@@ -254,11 +268,14 @@ async def create_payment_with_contact(message: Message, state: FSMContext):
 
         except Exception as e:
             # Mark order as failed
+            # Use a new transaction if the current one is broken? 
+            # Actually, session is passed from middleware, so we should be careful.
+            # But usually we can just set status and commit.
             order.status = "failed"
             await session.commit()
 
             # Show user-friendly error message
-            logger.error(f"Payment creation error: {str(e)}")
+            logger.error(f"Payment creation error details: {str(e)}", exc_info=True)
 
             error_text = (
                 "❌ <b>Ошибка при создании платежа</b>\n\n"
@@ -273,6 +290,11 @@ async def create_payment_with_contact(message: Message, state: FSMContext):
                 reply_markup=ReplyKeyboardRemove()
             )
             await state.clear()
+
+    except Exception as e:
+        logger.error(f"Critical error in create_payment_with_contact: {e}", exc_info=True)
+        await message.answer("❌ Критическая ошибка при создании платежа.")
+        await state.clear()
 
 
 @router.callback_query(F.data == "cancel_payment")
