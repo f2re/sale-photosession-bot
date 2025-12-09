@@ -301,11 +301,13 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
             await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
             return
 
-        msg = await callback.message.edit_text("🎨 Генерирую фотосессию (4 фото)... ⏳ ~1 мин")
         data = await state.get_data()
+        styles_count = len(data["styles"])
+
+        msg = await callback.message.edit_text(f"🎨 Генерирую фотосессию ({styles_count} фото)... ⏳ ~1 мин")
 
         res = await image_processor.generate_photoshoot(
-            data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user
+            data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user, msg
         )
 
         if not res["success"]:

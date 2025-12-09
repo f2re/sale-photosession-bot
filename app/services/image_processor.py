@@ -158,11 +158,12 @@ Your description:"""
         styles: List[Dict],
         aspect_ratio: str,
         bot: Bot,
-        user: User
+        user: User,
+        progress_message=None
     ) -> Dict:
         try:
             logger.info(f"Starting photoshoot for user {user.telegram_id}")
-            
+
             # Convert if needed
             try:
                 img = Image.open(BytesIO(product_image_bytes))
@@ -172,20 +173,44 @@ Your description:"""
             except Exception as e:
                 logger.error(f"Image format validation failed: {e}")
                 return {"success": False, "error": "Invalid image format"}
-            
-            # Generate all 4 style variations in parallel
+
+            total_styles = len(styles)
+
+            # Update progress: preparing request
+            if progress_message:
+                try:
+                    await progress_message.edit_text(
+                        f"📤 Отправляю запросы на генерацию {total_styles} изображений...\n"
+                        f"⏳ Ожидайте, это займет около минуты"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update progress message: {e}")
+
+            # Generate all style variations in parallel
             tasks = [
                 self._generate_single_variant(
                     product_image_bytes, s["prompt"], s["style_name"], aspect_ratio
                 ) for s in styles
             ]
-            
-            logger.info(f"Generating {len(tasks)} style variations in parallel")
+
+            logger.info(f"Generating {total_styles} style variations in parallel")
+
+            # Update progress: waiting for results
+            if progress_message:
+                try:
+                    await progress_message.edit_text(
+                        f"🎨 Генерация изображений в процессе...\n"
+                        f"🔄 Обрабатываю {total_styles} стилей\n"
+                        f"⏳ ~1 мин"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update progress message: {e}")
+
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             images = []
             successful_count = 0
-            
+
             for i, (res, style) in enumerate(zip(results, styles)):
                 if isinstance(res, Exception):
                     logger.error(f"Style {i+1} ({style['style_name']}) failed with exception: {res}")
@@ -211,14 +236,25 @@ Your description:"""
                         "prompt": style["prompt"]
                     })
                     successful_count += 1
-            
-            logger.info(f"Photoshoot completed: {successful_count}/4 successful")
-            
+
+            # Update progress: generation complete
+            if progress_message:
+                try:
+                    await progress_message.edit_text(
+                        f"✅ Генерация завершена!\n"
+                        f"📊 Получено изображений: {successful_count} из {total_styles}\n"
+                        f"⏳ Отправляю результаты..."
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update progress message: {e}")
+
+            logger.info(f"Photoshoot completed: {successful_count}/{total_styles} successful")
+
             # Notify admins if there were failures
-            if successful_count < 4:
+            if successful_count < total_styles:
                 await NotificationService.notify_admins_processing_error(
                     bot, user.telegram_id, user.username, "NanoBanana",
-                    f"Failed {4-successful_count}/4 images"
+                    f"Failed {total_styles-successful_count}/{total_styles} images"
                 )
             
             return {
