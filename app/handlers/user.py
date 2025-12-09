@@ -233,11 +233,11 @@ async def analyze_styles(callback: CallbackQuery, state: FSMContext):
         return
         
     await state.update_data(product_name=res["product_name"], styles=res["styles"])
-    
+
     text = _format_styles_preview(res["styles"])
     await msg.edit_text(
         f"✨ <b>Предложенные стили:</b>\n📦 {res['product_name']}\n\n{text}",
-        reply_markup=get_style_preview_keyboard(True), parse_mode="HTML"
+        reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
@@ -256,8 +256,8 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
     await state.update_data(product_name=res["product_name"], styles=res["styles"])
     text = _format_styles_preview(res["styles"])
     await msg.edit_text(
-        f"🎲 <b>Случайные стили:</b>\n\n{text}",
-        reply_markup=get_style_preview_keyboard(True), parse_mode="HTML"
+        f"🎲 <b>Случайные стили:</b>\n📦 {res['product_name']}\n\n{text}",
+        reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
@@ -287,8 +287,8 @@ async def apply_style(callback: CallbackQuery, state: FSMContext, session: Async
     await state.update_data(product_name=style["product_name"], aspect_ratio=style["aspect_ratio"], styles=style["styles"])
     text = _format_styles_preview(style["styles"])
     await callback.message.edit_text(
-        f"✅ <b>Стиль применен:</b>\n\n{text}",
-        reply_markup=get_style_preview_keyboard(False), parse_mode="HTML"
+        f"✅ <b>Стиль применен:</b>\n📦 {style['product_name']}\n\n{text}",
+        reply_markup=get_style_preview_keyboard(False, style["product_name"]), parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 

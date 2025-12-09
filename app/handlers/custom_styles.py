@@ -40,10 +40,27 @@ async def custom_style_start(callback: CallbackQuery, state: FSMContext):
         "• Деревянная разделочная доска\n"
         "• Парфюм Chanel N°5\n"
         "• Керамическая ваза ручной работы\n\n"
-        "✏️ Введите название товара:",
+        "✏️ Введите название товара:\n\n"
+        "Для отмены отправьте /cancel",
         parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.custom_style_product)
+
+
+@router.message(StateFilter(PhotoshootStates.custom_style_product), F.text == "/cancel")
+async def cancel_custom_style_product(message: Message, state: FSMContext):
+    """Cancel custom style creation from product input stage"""
+    data = await state.get_data()
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+
+    await state.set_state(PhotoshootStates.selecting_styles_method)
+    await message.answer(
+        f"❌ Создание кастомного стиля отменено.\n\n"
+        f"✅ Пропорции: <b>{aspect_ratio}</b>\n"
+        f"Выберите другой метод:",
+        parse_mode="HTML",
+        reply_markup=get_style_selection_keyboard()
+    )
 
 
 @router.message(StateFilter(PhotoshootStates.custom_style_product))
@@ -70,10 +87,27 @@ async def custom_style_product_input(message: Message, state: FSMContext):
         "• Природный стиль, деревянная поверхность, утренний свет\n"
         "• Неоновые огни, киберпанк, футуристично\n"
         "• Роскошный стиль, золотые аксессуары, блеск\n\n"
-        "✏️ Введите описание стиля:",
+        "✏️ Введите описание стиля:\n\n"
+        "Для отмены отправьте /cancel",
         parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.custom_style_description)
+
+
+@router.message(StateFilter(PhotoshootStates.custom_style_description), F.text == "/cancel")
+async def cancel_custom_style_description(message: Message, state: FSMContext):
+    """Cancel custom style creation from description input stage"""
+    data = await state.get_data()
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+
+    await state.set_state(PhotoshootStates.selecting_styles_method)
+    await message.answer(
+        f"❌ Создание кастомного стиля отменено.\n\n"
+        f"✅ Пропорции: <b>{aspect_ratio}</b>\n"
+        f"Выберите другой метод:",
+        parse_mode="HTML",
+        reply_markup=get_style_selection_keyboard()
+    )
 
 
 @router.message(StateFilter(PhotoshootStates.custom_style_description))
@@ -189,22 +223,45 @@ async def edit_product_name_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     data = await state.get_data()
     current_name = data.get("product_name", "Product")
-    
-    await callback.message.answer(
+
+    # Store the original message ID so we can go back to it
+    await state.update_data(edit_message_id=callback.message.message_id)
+
+    await callback.message.edit_text(
         f"✏️ <b>Изменение названия товара</b>\n\n"
         f"📋 Текущее: <b>{current_name}</b>\n\n"
         "📝 Введите новое название товара:\n"
-        "(Стили будут перегенерированы на основе нового названия)",
+        "(Стили будут перегенерированы на основе нового названия)\n\n"
+        "Для отмены отправьте /cancel",
         parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.editing_product_name)
+
+
+@router.message(StateFilter(PhotoshootStates.editing_product_name), F.text == "/cancel")
+async def cancel_edit_product_name(message: Message, state: FSMContext):
+    """Cancel product name editing and return to previous state"""
+    data = await state.get_data()
+    product_name = data.get("product_name", "Product")
+    styles = data.get("styles", [])
+
+    # Return to reviewing state
+    await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+
+    text = _format_styles_preview(styles)
+    await message.answer(
+        f"❌ <b>Редактирование отменено</b>\n\n"
+        f"✨ <b>Текущие стили:</b>\n📦 {product_name}\n\n{text}",
+        reply_markup=get_style_preview_keyboard(True, product_name),
+        parse_mode="HTML"
+    )
 
 
 @router.message(StateFilter(PhotoshootStates.editing_product_name))
 async def edit_product_name_input(message: Message, state: FSMContext):
     """Handle new product name input and regenerate styles"""
     new_name = message.text.strip()
-    
+
     if len(new_name) < 3:
         await message.answer("⚠️ Название слишком короткое (минимум 3 символа). Попробуйте ещё раз:")
         return
