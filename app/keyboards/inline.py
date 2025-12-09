@@ -51,7 +51,7 @@ def get_style_management_keyboard(preset_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Переименовать", callback_data=f"rename_style:{preset_id}")
     builder.button(text="🗑 Удалить", callback_data=f"delete_style:{preset_id}")
-    builder.button(text="🔙 Назад к списку", callback_data="styles:saved")
+    builder.button(text="🔙 Назад к списку", callback_data="manage_styles")
     builder.adjust(2, 1)
     return builder.as_markup()
 
