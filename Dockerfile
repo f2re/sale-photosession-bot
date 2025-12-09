@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Ensure logs are output immediately
-ENV PYTHONUNBUFFERED=1
+#ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
