@@ -164,7 +164,7 @@ async def copy_referral_handler(callback: CallbackQuery):
     await callback.message.answer(f"<code>{link}</code>", parse_mode="HTML")
 
 @router.message(F.text == "ℹ️ Информация")
-def info_handler(message: Message):
+async def info_handler(message: Message):
     from app.keyboards.user_kb import get_info_menu
     await message.answer(
         "ℹ️ <b>Информация</b>\n\n"
