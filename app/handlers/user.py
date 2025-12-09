@@ -216,6 +216,7 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
 
 @router.callback_query(F.data.startswith("aspect_ratio:"))
 async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     ratio = callback.data.split(":")[1]
     await state.update_data(aspect_ratio=ratio)
     await callback.message.edit_text(
@@ -267,9 +268,10 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "styles:saved")
 async def show_saved(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await callback.answer()
     styles = await StyleManager.get_user_styles(session, callback.from_user.id)
     if not styles:
-        await callback.answer("Нет сохраненных стилей", show_alert=True)
+        await callback.message.answer("Нет сохраненных стилей", show_alert=True)
         return
     
     text = "\n".join([f"{i+1}. {s['name']} ({s['aspect_ratio']})" for i, s in enumerate(styles)])
@@ -280,10 +282,11 @@ async def show_saved(callback: CallbackQuery, state: FSMContext, session: AsyncS
 
 @router.callback_query(F.data.startswith("apply_style:"))
 async def apply_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await callback.answer()
     pid = int(callback.data.split(":")[1])
     style = await StyleManager.apply_style(session, callback.from_user.id, pid)
     if not style:
-        await callback.answer("Ошибка", show_alert=True)
+        await callback.message.answer("Ошибка", show_alert=True)
         return
         
     await state.update_data(product_name=style["product_name"], aspect_ratio=style["aspect_ratio"], styles=style["styles"])
@@ -296,6 +299,7 @@ async def apply_style(callback: CallbackQuery, state: FSMContext, session: Async
 
 @router.callback_query(F.data == "confirm_generation")
 async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    await callback.answer()
     try:
         user = await get_or_create_user(session, callback.from_user.id)
         if user.images_remaining < 1:
@@ -386,11 +390,12 @@ async def save_style_prompt(callback: CallbackQuery, state: FSMContext):
     Handler for 'Save Style' button.
     Works for both preview stage and post-generation stage.
     """
+    await callback.answer()
     data = await state.get_data()
     
     # Check if we have style data to save
     if not data.get("styles") and not data.get("last_generated"):
-         await callback.answer("Нет данных стиля для сохранения", show_alert=True)
+         await callback.message.answer("Нет данных стиля для сохранения", show_alert=True)
          return
 
     await callback.message.answer(
@@ -400,7 +405,6 @@ async def save_style_prompt(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(PhotoshootStates.saving_style_name)
-    await callback.answer()
 
 @router.message(StateFilter(PhotoshootStates.saving_style_name))
 async def save_style_name(message: Message, state: FSMContext, session: AsyncSession):
@@ -451,17 +455,20 @@ def _format_styles_preview(styles):
 
 @router.callback_query(F.data == "back_to_ratio")
 async def back_ratio(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     await safe_edit_text(callback.message, "Выберите пропорции:", reply_markup=get_aspect_ratio_keyboard())
     await state.set_state(PhotoshootStates.selecting_aspect_ratio)
 
 @router.callback_query(F.data == "back_to_style_selection")
 async def back_styles(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     data = await state.get_data()
     await safe_edit_text(callback.message, f"✅ Пропорции: {data['aspect_ratio']}\nВыберите метод:", reply_markup=get_style_selection_keyboard())
     await state.set_state(PhotoshootStates.selecting_styles_method)
 
 @router.callback_query(F.data == "new_photoshoot")
 async def new_photoshoot(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     await callback.message.answer("📸 Отправьте фото товара.")
     await state.clear()
     await state.set_state(PhotoshootStates.waiting_for_product_photo)
