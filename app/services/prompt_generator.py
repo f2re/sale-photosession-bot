@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class PromptGenerator:
     """Generates 4 style prompts for product photoshoot in structured JSON"""
-    
+
     SYSTEM_PROMPT = """**ROLE**: Professional product photographer specialized in atmospheric scent photography
 **TASK**: Transform scent descriptions → Nano Banana (Gemini 2.5 Flash) prompts
 **OUTPUT**: Production-ready prompts with technical specs and self-validation
@@ -93,7 +93,7 @@ class PromptGenerator:
 **Batch format (tables):**
 ```
 {
-  "product_name": "short product name (2-4 words)",
+  "product_name": "short product name (2-4 words) in Russian",
   "styles": [
     {
         "style_name": "[short style name in Russian (2-3 words)]",
@@ -154,7 +154,7 @@ class PromptGenerator:
 **Ex 2: Birch & Cranberry (⏱️ 60 sec total)**
 ```
 {
-  "product_name": "Taiga Candle Collection",
+  "product_name": "Коллекция свеч",
   "styles": [
     {
         "style_name": "Тёплый мох",
@@ -284,7 +284,7 @@ Be maximally creative! Use different:
 **Batch format (tables):**
 ```
 {
-  "product_name": "short product name (2-4 words)",
+  "product_name": "short product name (2-4 words) in Russian",
   "styles": [
     {
         "style_name": "[short style name in Russian (2-3 words)]",
@@ -345,7 +345,7 @@ Be maximally creative! Use different:
 **Ex 2: Birch & Cranberry (⏱️ 60 sec total)**
 ```
 {
-  "product_name": "Taiga Candle Collection",
+  "product_name": "Коллекция тайга",
   "styles": [
     {
         "style_name": "Тёплый мох",
@@ -389,19 +389,19 @@ Be maximally creative! Use different:
         self.api_key = settings.OPENROUTER_API_KEY
         self.model = settings.PROMPT_MODEL
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-    
+
     def _extract_json_from_response(self, content: str) -> str:
         """
         Extract JSON from response that might be wrapped in markdown code blocks.
-        
+
         Handles:
         - ```json ... ```
         - ``` ... ```
         - Raw JSON
-        
+
         Args:
             content: Raw response content
-            
+
         Returns:
             Clean JSON string
         """
@@ -411,23 +411,23 @@ Be maximally creative! Use different:
         if json_match:
             logger.debug("Extracted JSON from ```json code block")
             return json_match.group(1).strip()
-        
+
         # Pattern 2: ``` ... ``` (without language specifier)
         code_match = re.search(r'```\s*\n?(.+?)\n?```', content, re.DOTALL)
         if code_match:
             logger.debug("Extracted JSON from ``` code block")
             return code_match.group(1).strip()
-        
+
         # Pattern 3: Try to find JSON object directly
         json_obj_match = re.search(r'\{.+\}', content, re.DOTALL)
         if json_obj_match:
             logger.debug("Found JSON object in response")
             return json_obj_match.group(0).strip()
-        
+
         # Return as-is if no patterns matched
         logger.debug("No markdown wrapper found, returning content as-is")
         return content.strip()
-    
+
     async def generate_styles_from_description(
         self,
         product_description: str,
@@ -436,12 +436,12 @@ Be maximally creative! Use different:
     ) -> Dict:
         """
         Generates 4 styles for the product
-        
+
         Args:
             product_description: Product description or "product from image"
             aspect_ratio: Aspect ratio (1:1, 3:4, etc.)
             random: If True, generates random creative styles
-            
+
         Returns:
             {
                 "success": bool,
@@ -458,7 +458,7 @@ Be maximally creative! Use different:
             product_text = product_description
             if product_description.lower() in ["product image", "product from image"]:
                 product_text = "A high-end commercial product"
-                
+
             user_prompt = f"""Product: {product_text}
 Aspect Ratio: {aspect_ratio}
 
@@ -472,7 +472,7 @@ Return result STRICTLY in JSON format."""
                 "HTTP-Referer": "https://t.me/@SalePhotosession_bot",
                 "X-Title": "Product Photoshoot Bot"
             }
-            
+
             payload = {
                 "model": self.model,
                 "messages": [
@@ -489,9 +489,9 @@ Return result STRICTLY in JSON format."""
                 "max_tokens": 2000,
                 "response_format": {"type": "json_object"}
             }
-            
+
             logger.info(f"Generating {'random' if random else 'analyzed'} styles for: {product_text[:50]}")
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.base_url,
@@ -502,73 +502,73 @@ Return result STRICTLY in JSON format."""
                     if response.status == 200:
                         result = await response.json()
                         content = result['choices'][0]['message']['content']
-                        
+
                         # Parse JSON
                         try:
                             logger.debug(f"LLM raw response (first 200 chars): {content}")
-                            
+
                             # Extract JSON from potential markdown wrapper
                             clean_json = self._extract_json_from_response(content)
                             logger.debug(f"Clean JSON (first 200 chars): {clean_json[:200]}...")
-                            
+
                             # Parse the cleaned JSON
                             data = json.loads(clean_json)
-                            
+
                             # Validate structure
                             if not self._validate_response(data):
                                 logger.warning(f"Invalid JSON structure: {data}")
                                 raise ValueError("Invalid JSON structure")
-                            
+
                             logger.info(f"Successfully generated styles for: {data.get('product_name', 'unknown')}")
-                            
+
                             return {
                                 "success": True,
                                 "product_name": data["product_name"],
                                 "styles": data["styles"],
                                 "error": None
                             }
-                            
+
                         except json.JSONDecodeError as e:
                             logger.error(f"Failed to parse JSON response: {e}")
                             logger.debug(f"Response content: {content}")
                             logger.warning("Using fallback prompts")
                             return self._fallback_response(product_description, aspect_ratio)
-                    
+
                     else:
                         error_text = await response.text()
                         logger.error(f"API error: {response.status} - {error_text}")
                         return self._fallback_response(product_description, aspect_ratio)
-                        
+
         except Exception as e:
             logger.error(f"Error generating styles: {e}", exc_info=True)
             return self._fallback_response(product_description, aspect_ratio)
-    
+
     def _validate_response(self, data: dict) -> bool:
         """Validate JSON structure"""
-        if not isinstance(data, dict): 
+        if not isinstance(data, dict):
             logger.warning("Response is not a dictionary")
             return False
-        if "product_name" not in data or "styles" not in data: 
+        if "product_name" not in data or "styles" not in data:
             logger.warning(f"Missing required fields. Keys: {data.keys()}")
             return False
-        if not isinstance(data["styles"], list) or len(data["styles"]) != 4: 
+        if not isinstance(data["styles"], list) or len(data["styles"]) != 4:
             logger.warning(f"Invalid styles array. Type: {type(data['styles'])}, Length: {len(data['styles']) if isinstance(data['styles'], list) else 'N/A'}")
             return False
-        
+
         for i, style in enumerate(data["styles"]):
-            if not isinstance(style, dict): 
+            if not isinstance(style, dict):
                 logger.warning(f"Style {i} is not a dictionary")
                 return False
-            if "style_name" not in style or "prompt" not in style: 
+            if "style_name" not in style or "prompt" not in style:
                 logger.warning(f"Style {i} missing required fields. Keys: {style.keys()}")
                 return False
-        
+
         return True
-    
+
     def _fallback_response(self, product: str, aspect_ratio: str) -> Dict:
         """Fallback if generation fails"""
         logger.warning("Using fallback prompts")
-        
+
         return {
             "success": True,
             "product_name": "Product",
