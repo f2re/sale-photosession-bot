@@ -29,13 +29,13 @@ class NanoBananaService:
     ) -> Dict:
         """
         Generate image based on prompt and reference image
-        
+
         Args:
             prompt: Detailed prompt
             reference_image_bytes: Original product image
             aspect_ratio: Target aspect ratio (e.g. "1:1")
             strength: Control strength (0.0 to 1.0)
-            
+
         Returns:
             {
                 "success": bool,
@@ -46,7 +46,7 @@ class NanoBananaService:
         try:
             # Convert reference image to base64
             base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
-            
+
             # Determine mime type
             try:
                 img = Image.open(BytesIO(reference_image_bytes))
@@ -62,7 +62,7 @@ class NanoBananaService:
                 "HTTP-Referer": "https://t.me/SalePhotosession_bot",
                 "X-Title": "Product Photoshoot Bot"
             }
-            
+
             # Construct system prompt for image generation
             system_prompt = (
                 "You are an advanced AI photographer. "
@@ -104,14 +104,15 @@ class NanoBananaService:
                     }
                 ]
             }
-            
+
             logger.info(f"Sending generation request to {self.model}...")
-            
+            logger.debug(payload)
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    self.base_url, 
-                    json=payload, 
-                    headers=headers, 
+                    self.base_url,
+                    json=payload,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
                     if response.status == 200:
@@ -167,7 +168,7 @@ class NanoBananaService:
                         logger.error(f"No images in response. Content: {content[:200]}")
                         logger.debug(f"Full response: {result}")
                         return {"success": False, "image_bytes": None, "error": "No images generated in response"}
-                        
+
                     else:
                         error_text = await response.text()
                         logger.error(f"API Error: {response.status} - {error_text}")
