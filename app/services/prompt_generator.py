@@ -466,6 +466,7 @@ Return result STRICTLY in JSON format."""
                         
                         # Parse JSON
                         try:
+                            logger.debug(f"LLM raw response: {content}")
                             data = json.loads(content)
                             
                             # Validate structure
