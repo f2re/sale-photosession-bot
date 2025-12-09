@@ -16,7 +16,7 @@ from app.keyboards.inline import (
     get_confirm_save_style_keyboard,
     get_buy_packages_keyboard
 )
-from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu
+from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu, get_cancel_keyboard
 from app.keyboards.reply import get_main_menu
 from app.services.prompt_generator import PromptGenerator
 from app.services.image_processor import ImageProcessor
@@ -38,7 +38,23 @@ prompt_generator = PromptGenerator()
 image_processor = ImageProcessor()
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
+async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, command: Command = None):
+    # Parse referral code if present
+    referral_code = None
+    if command and command.args and command.args.startswith("ref_"):
+        referral_code = command.args.replace("ref_", "")
+
+    # Create user (passing referral code logic to CRUD or handling it here)
+    # We'll handle it here for simplicity: check if new user, if so, link to referrer
+    
+    # Check if user exists first to know if it's a new registration
+    # (Simplified: get_or_create checks, but we need to pass referrer if new)
+    
+    # We can pass referral_code to get_or_create_user if we update it, 
+    # or just let get_or_create return the user and 'created' flag.
+    # Since we can't easily change get_or_create signature safely without checking usages,
+    # let's assume get_or_create just gets/creates.
+    
     user = await get_or_create_user(
         session=session,
         telegram_id=message.from_user.id,
@@ -47,6 +63,37 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
         last_name=message.from_user.last_name
     )
     
+    # If user was just created (or has no referrer) and we have a code
+    if referral_code and not user.referred_by_id and str(user.telegram_id) != referral_code:
+        # Find referrer
+        from sqlalchemy import select
+        from app.database.models import User
+        
+        result = await session.execute(select(User).where(User.referral_code == referral_code))
+        referrer = result.scalar_one_or_none()
+        
+        if not referrer:
+             # Try matching by telegram_id if code didn't match
+             result = await session.execute(select(User).where(User.telegram_id == int(referral_code) if referral_code.isdigit() else 0))
+             referrer = result.scalar_one_or_none()
+             
+        if referrer:
+            user.referred_by_id = referrer.id
+            referrer.total_referrals += 1
+            # Give reward to referrer?
+            referrer.images_remaining += settings.REFERRAL_REWARD_START
+            await session.commit()
+            
+            try:
+                await message.bot.send_message(
+                    referrer.telegram_id,
+                    f"🎉 <b>Новый реферал!</b>\n\n"
+                    f"Пользователь {message.from_user.full_name} зарегистрировался по вашей ссылке.\n"
+                    f"Вам начислено +{settings.REFERRAL_REWARD_START} фотосессия!"
+                )
+            except:
+                pass
+
     welcome_text = f"""
 🎨 <b>Добро пожаловать в Product Photoshoot Bot!</b>
 
@@ -64,30 +111,58 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 """
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=get_main_menu())
 
-@router.message(F.text == "📸 Создать бизнес-портрет")
+@router.message(F.text == "📸 Создать фотосессию товара")
 async def create_photoshoot_msg(message: Message, state: FSMContext):
     await message.answer("📸 Отправьте фото вашего товара (как фото или файл).")
     await state.set_state(PhotoshootStates.waiting_for_product_photo)
 
 @router.message(F.text == "👥 Реферальная программа")
 async def referral_handler(message: Message, session: AsyncSession, bot: Bot):
+    """Handle referral program menu"""
     user = await get_or_create_user(session, message.from_user.id)
-    # Use telegram ID as referral code for simplicity if not set
-    # Assuming user model doesn't have explicit referral_code field, checking crud
-    # If not exists, we can use telegram_id or hash
-    referral_code = str(message.from_user.id) 
+    
+    # Generate referral code if not exists
+    if not user.referral_code:
+        # Use simple hex of ID or just ID if preferred, but let's stick to unique string
+        import uuid
+        user.referral_code = str(user.telegram_id) # Simple code = telegram_id
+        await session.commit()
+    
+    # Get stats (this would ideally be a DB query aggregating rewards)
+    # For now, using the fields we have
+    referrals_count = user.total_referrals
+    
+    # Calculate earnings (mock logic or real if table exists)
+    # In real app: query ReferralReward where user_id=user.id
+    # For now, we display what we store
     
     bot_info = await bot.get_me()
     
     await message.answer(
         f"👥 <b>Реферальная программа</b>\n\n"
-        f"Приглашайте друзей и получайте бесплатные фотосессии!\n"
-        f"За каждого приглашенного друга, который запустит бота, вы получите +{settings.REFERRAL_REWARD_START} фотосессию.\n"
-        f"А также {settings.REFERRAL_REWARD_PURCHASE_PERCENT}% от их покупок!\n\n"
-        f"Ваша ссылка:",
+        f"Приглашайте друзей и получайте бонусы!\n\n"
+        f"🔗 <b>Ваша статистика:</b>\n"
+        f"👥 Приглашено друзей: <b>{referrals_count}</b>\n"
+        # f"💰 Заработано фотосессий: <b>{user.referral_balance}</b>\n" # If we had this field
+        f"\n"
+        f"🎁 <b>Бонусы:</b>\n"
+        f"• +{settings.REFERRAL_REWARD_START} фотосессия за каждого друга\n"
+        f"• {settings.REFERRAL_REWARD_PURCHASE_PERCENT}% от их покупок\n\n"
+        f"👇 <b>Ваша ссылка для приглашения:</b>",
         parse_mode="HTML",
-        reply_markup=get_referral_menu(bot_info.username, referral_code)
+        reply_markup=get_referral_menu(bot_info.username, user.referral_code)
     )
+
+@router.callback_query(F.data.startswith("copy_referral:"))
+async def copy_referral_handler(callback: CallbackQuery):
+    """Handle copy referral link action"""
+    code = callback.data.split(":")[1]
+    bot_info = await callback.bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start=ref_{code}"
+    
+    await callback.answer("Ссылка скопирована!", show_alert=False)
+    # Send as text so user can copy
+    await callback.message.answer(f"<code>{link}</code>", parse_mode="HTML")
 
 @router.message(F.text == "ℹ️ Информация")
 async def info_handler(message: Message):
@@ -307,21 +382,69 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
 
 @router.callback_query(F.data == "save_style")
 async def save_style_prompt(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите название для сохранения стиля:")
+    """
+    Handler for 'Save Style' button.
+    Works for both preview stage and post-generation stage.
+    """
+    data = await state.get_data()
+    
+    # Check if we have style data to save
+    if not data.get("styles") and not data.get("last_generated"):
+         await callback.answer("Нет данных стиля для сохранения", show_alert=True)
+         return
+
+    await callback.message.answer(
+        "💾 <b>Сохранение стиля</b>\n\n"
+        "Введите название для этого стиля (например: 'Мой любимый неон'):",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
+    )
     await state.set_state(PhotoshootStates.saving_style_name)
+    await callback.answer()
 
 @router.message(StateFilter(PhotoshootStates.saving_style_name))
 async def save_style_name(message: Message, state: FSMContext, session: AsyncSession):
     name = message.text
+    if len(name) > 30:
+        await message.answer("⚠️ Название слишком длинное. Максимум 30 символов.")
+        return
+
     data = await state.get_data()
+    
+    # Extract style data depending on where we are coming from
+    # If post-generation, data['styles'] should hold the style used.
+    # If multiple styles were generated, we might need to know which one.
+    # For now, assuming single style flow or taking the first/active one.
+    
+    # In generate_photoshoot, we pass 'styles' list.
+    styles_to_save = data.get("styles")
+    
+    if not styles_to_save:
+        await message.answer("❌ Ошибка: данные стиля потеряны.")
+        await state.clear()
+        return
+
     res = await StyleManager.save_style(
-        session, message.from_user.id, name, data["product_name"], data["aspect_ratio"], data["styles"]
+        session, message.from_user.id, name, data.get("product_name", "Product"), data.get("aspect_ratio", "1:1"), styles_to_save
     )
+    
     if res["success"]:
-        await message.answer("✅ Стиль сохранен!", reply_markup=get_post_generation_keyboard(True))
+        # Different reply markup depending on context
+        markup = get_post_generation_keyboard(True) if data.get("last_generated") else get_style_selection_keyboard()
+        await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
     else:
         await message.answer(f"❌ Ошибка: {res['error']}")
-    await state.clear() # Or go back to generated state? Clear is safer.
+    
+    # Don't clear state completely if we want to allow "Create more", 
+    # but usually saving finishes the "save" interaction.
+    # We should keep the main context if possible.
+    # await state.clear() 
+    # Instead of clearing everything, just unset the specific saving state
+    # returning to the previous logical state
+    if data.get("last_generated"):
+        await state.set_state(PhotoshootStates.generating_photoshoot)
+    else:
+        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 def _format_styles_preview(styles):
     return "\n\n".join([f"{i+1}. <b>{s['style_name']}</b>" for i, s in enumerate(styles)])

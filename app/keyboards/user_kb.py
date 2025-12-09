@@ -6,7 +6,7 @@ def get_main_menu() -> ReplyKeyboardMarkup:
     """Get main menu keyboard"""
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📸 Создать бизнес-портрет")],
+            [KeyboardButton(text="📸 Создать фотосессию товара")],
             [KeyboardButton(text="💎 Купить пакет"), KeyboardButton(text="📊 Мой баланс")],
             [KeyboardButton(text="👥 Реферальная программа")],
             [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="💬 Поддержка")]

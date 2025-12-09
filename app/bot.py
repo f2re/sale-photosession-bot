@@ -10,7 +10,7 @@ from alembic import command
 
 from app.config import settings
 from app.database import init_db
-from app.handlers import user, admin, payment, support, batch_processing
+from app.handlers import user, admin, payment, support, batch_processing, style_management
 from app.services.yandex_metrika import periodic_metrika_upload
 from app.middlewares import DbSessionMiddleware
 
@@ -95,6 +95,7 @@ async def main():
     # IMPORTANT: batch_processing must be registered BEFORE user router
     # to handle media groups (albums) before single images
     dp.include_router(batch_processing.router)
+    dp.include_router(style_management.router)
     dp.include_router(user.router)
     dp.include_router(admin.router)
     dp.include_router(payment.router)

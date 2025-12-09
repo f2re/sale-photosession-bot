@@ -61,6 +61,9 @@ def get_post_generation_keyboard(has_balance: bool) -> InlineKeyboardMarkup:
         builder.button(text="🎨 Создать ещё фотосессию", callback_data="new_photoshoot")
     else:
         builder.button(text="💳 Купить пакет", callback_data="buy_package")
+    
+    # Allow saving the style used for this generation
+    builder.button(text="💾 Сохранить этот стиль", callback_data="save_style")
     builder.button(text="📁 Мои стили", callback_data="manage_styles")
     builder.button(text="ℹ️ Мой профиль", callback_data="profile")
     builder.adjust(1)
