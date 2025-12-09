@@ -301,11 +301,13 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
             await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
             return
 
-        msg = await callback.message.edit_text("🎨 Генерирую фотосессию (4 фото)... ⏳ ~1 мин")
         data = await state.get_data()
+        styles_count = len(data["styles"])
+
+        msg = await callback.message.edit_text(f"🎨 Генерирую фотосессию ({styles_count} фото)... ⏳ ~1 мин")
 
         res = await image_processor.generate_photoshoot(
-            data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user
+            data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user, msg
         )
 
         if not res["success"]:
@@ -319,6 +321,7 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
         successful_count = 0
         failed_count = 0
 
+        style_names = []
         for i, img in enumerate(res["images"]):
             if img.get("success"):
                 try:
@@ -327,11 +330,9 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
                         img["image_bytes"],
                         filename=f"photoshoot_{i}_{img['style_name']}.png"
                     )
-                    media.append(InputMediaPhoto(
-                        media=input_file,
-                        caption=f"Style: {img['style_name']}" if i==0 else None
-                    ))
+                    media.append(InputMediaPhoto(media=input_file))
                     await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], data["aspect_ratio"])
+                    style_names.append(img['style_name'])
                     successful_count += 1
                 except Exception as e:
                     logger.error(f"Error preparing image {i}: {e}", exc_info=True)
@@ -345,8 +346,17 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
             try:
                 await callback.message.answer_media_group(media)
 
-                # Create summary message
+                # Create summary message with all styles
                 summary = "✅ Готово!"
+
+                if style_names:
+                    if len(style_names) == 1:
+                        summary += f"\n\n🎨 Стиль: {style_names[0]}"
+                    else:
+                        summary += "\n\n🎨 Стили:\n"
+                        for idx, style in enumerate(style_names, 1):
+                            summary += f"{idx}. {style}\n"
+
                 if failed_count > 0:
                     summary += f"\n⚠️ {failed_count} из {successful_count + failed_count} изображений не удалось сгенерировать"
 
@@ -428,25 +438,38 @@ async def save_style_name(message: Message, state: FSMContext, session: AsyncSes
     res = await StyleManager.save_style(
         session, message.from_user.id, name, data.get("product_name", "Product"), data.get("aspect_ratio", "1:1"), styles_to_save
     )
-    
+
     if res["success"]:
-        # Different reply markup depending on context
-        markup = get_post_generation_keyboard(True) if data.get("last_generated") else get_style_selection_keyboard()
-        await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
+        # Check context: are we working with a photo?
+        has_photo = bool(data.get("product_image_bytes"))
+        has_generated = data.get("last_generated")
+
+        if has_generated:
+            # After generation - show post-generation menu
+            markup = get_post_generation_keyboard(True)
+            await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
+            await state.set_state(PhotoshootStates.generating_photoshoot)
+        elif has_photo:
+            # Working with photo but haven't generated yet - return to style preview
+            product_name = data.get("product_name", "Product")
+            styles = data.get("styles", [])
+            text = _format_styles_preview(styles)
+
+            await message.answer(
+                f"✅ Стиль '<b>{name}</b>' успешно сохранен!\n\n"
+                f"✨ <b>Текущие стили:</b>\n📦 {product_name}\n\n{text}",
+                parse_mode="HTML",
+                reply_markup=get_style_preview_keyboard(True, product_name)
+            )
+            await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+        else:
+            # No photo context - return to style selection
+            markup = get_style_selection_keyboard()
+            await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
+            await state.set_state(PhotoshootStates.selecting_styles_method)
     else:
         logger.error(f"Failed to save style: {res['error']}")
         await message.answer(f"❌ Ошибка: {res['error']}")
-    
-    # Don't clear state completely if we want to allow "Create more", 
-    # but usually saving finishes the "save" interaction.
-    # We should keep the main context if possible.
-    # await state.clear() 
-    # Instead of clearing everything, just unset the specific saving state
-    # returning to the previous logical state
-    if data.get("last_generated"):
-        await state.set_state(PhotoshootStates.generating_photoshoot)
-    else:
-        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 @router.callback_query(F.data == "cancel_action")
 async def cancel_handler(callback: CallbackQuery, state: FSMContext):

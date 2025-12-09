@@ -24,6 +24,10 @@ from app.utils.validators import validate_package_id
 logger = logging.getLogger(__name__)
 router = Router()
 
+# Global dictionary to track active payment check tasks
+# Key: payment_id, Value: asyncio.Task
+active_payment_checks = {}
+
 
 class PaymentStates(StatesGroup):
     waiting_for_contact = State()  # Waiting for user to choose contact method
@@ -286,7 +290,7 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
 
             # Create background task for automatic payment checking
             logger.info(f"User {message.from_user.id} | Starting auto payment checker...")
-            asyncio.create_task(
+            check_task = asyncio.create_task(
                 auto_check_and_notify(
                     payment_id=payment_info["payment_id"],
                     bot=bot,
@@ -294,6 +298,9 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
                     chat_id=message.chat.id
                 )
             )
+
+            # Store task reference for potential cancellation
+            active_payment_checks[payment_info["payment_id"]] = check_task
 
         except ValueError as e:
             # ValueError is raised when no contact info provided - should not happen here
@@ -337,15 +344,63 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
 
 
 @router.callback_query(F.data == "cancel_payment")
-async def cancel_payment_handler(callback: CallbackQuery, state: FSMContext):
+async def cancel_payment_handler(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """Handle payment cancellation"""
     from aiogram.types import ReplyKeyboardRemove
-    
-    logger.info(f"User {callback.from_user.id} | Payment cancelled by user")
+    from app.services.yookassa import YookassaService
+    from app.database.models import Order
+    from sqlalchemy import select
 
+    logger.info(f"User {callback.from_user.id} | Payment cancellation requested")
+
+    # Get payment data from state
+    data = await state.get_data()
+    payment_id = data.get("payment_id")
+    order_id = data.get("order_id")
+
+    # Cancel auto-check task if exists
+    if payment_id and payment_id in active_payment_checks:
+        check_task = active_payment_checks[payment_id]
+        if not check_task.done():
+            check_task.cancel()
+            logger.info(f"User {callback.from_user.id} | Auto-check task cancelled for payment {payment_id}")
+
+        # Remove from active checks
+        del active_payment_checks[payment_id]
+
+    # Cancel payment in YooKassa
+    if payment_id:
+        try:
+            yookassa = YookassaService()
+            cancelled = yookassa.cancel_payment(payment_id)
+            if cancelled:
+                logger.info(f"User {callback.from_user.id} | Payment {payment_id} cancelled in YooKassa")
+            else:
+                logger.warning(f"User {callback.from_user.id} | Failed to cancel payment {payment_id} in YooKassa")
+        except Exception as e:
+            logger.error(f"User {callback.from_user.id} | Error cancelling payment {payment_id}: {e}", exc_info=True)
+
+    # Update order status in database
+    if order_id:
+        try:
+            result = await session.execute(
+                select(Order).where(Order.id == order_id)
+            )
+            order = result.scalar_one_or_none()
+
+            if order and order.status != "paid":
+                order.status = "canceled"
+                await session.commit()
+                logger.info(f"User {callback.from_user.id} | Order {order_id} marked as canceled")
+        except Exception as e:
+            logger.error(f"User {callback.from_user.id} | Error updating order {order_id}: {e}", exc_info=True)
+
+    # Clear state
     await state.clear()
+
     await callback.message.edit_text(
         "❌ Оплата отменена.\n\n"
+        "Платеж остановлен и не будет списан с вашей карты.\n\n"
         "Вы можете выбрать другой пакет или вернуться в главное меню.",
         reply_markup=get_back_keyboard()
     )
@@ -486,53 +541,64 @@ async def auto_check_and_notify(
 
     logger.info(f"User {user_telegram_id} | Starting auto-check for payment {payment_id}")
 
-    checker = PaymentChecker()
+    try:
+        checker = PaymentChecker()
 
-    # Run automatic checking (returns final status or None if timeout)
-    final_status = await checker.auto_check_payment(
-        payment_id=payment_id,
-        bot=bot,
-        user_telegram_id=user_telegram_id,
-        max_duration_minutes=10
-    )
+        # Run automatic checking (returns final status or None if timeout)
+        final_status = await checker.auto_check_payment(
+            payment_id=payment_id,
+            bot=bot,
+            user_telegram_id=user_telegram_id,
+            max_duration_minutes=10
+        )
 
-    # Send notification based on final status
-    if final_status == 'succeeded':
-        # User already notified by process_successful_payment
-        logger.info(f"User {user_telegram_id} | Payment {payment_id} auto-check completed: succeeded")
+        # Send notification based on final status
+        if final_status == 'succeeded':
+            # User already notified by process_successful_payment
+            logger.info(f"User {user_telegram_id} | Payment {payment_id} auto-check completed: succeeded")
 
-    elif final_status == 'canceled':
-        logger.info(f"User {user_telegram_id} | Payment {payment_id} canceled")
-        try:
-            await bot.send_message(
-                chat_id,
-                "❌ <b>Платеж отменен</b>\n\n"
-                "Ваш платеж был отменен.\n\n"
-                "Если это произошло по ошибке, вы можете создать новый платеж через меню 💎 Купить пакет.",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"User {user_telegram_id} | Failed to send cancellation notification: {str(e)}")
+        elif final_status == 'canceled':
+            logger.info(f"User {user_telegram_id} | Payment {payment_id} canceled")
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "❌ <b>Платеж отменен</b>\n\n"
+                    "Ваш платеж был отменен.\n\n"
+                    "Если это произошло по ошибке, вы можете создать новый платеж через меню 💎 Купить пакет.",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"User {user_telegram_id} | Failed to send cancellation notification: {str(e)}")
 
-    elif final_status is None:
-        # Timeout - payment still pending after 10 minutes
-        logger.warning(f"User {user_telegram_id} | Payment {payment_id} timeout - still pending after 10 minutes")
-        try:
-            await bot.send_message(
-                chat_id,
-                "⏱ <b>Время ожидания истекло</b>\n\n"
-                "Мы проверяли статус вашего платежа в течение 10 минут, но он все еще находится в обработке.\n\n"
-                "🔹 Обычно платежи обрабатываются быстрее, но иногда это может занять больше времени.\n"
-                "🔹 Как только платеж будет подтвержден, фотосессии будут автоматически зачислены на ваш баланс.\n\n"
-                "Если фотосессии не зачислены в течение 1 часа, пожалуйста, обратитесь в поддержку с номером платежа:\n"
-                f"<code>{payment_id}</code>",
-                parse_mode="HTML",
-                reply_markup=get_support_contact_keyboard()
-            )
-        except Exception as e:
-            logger.error(f"User {user_telegram_id} | Failed to send timeout notification: {str(e)}")
+        elif final_status is None:
+            # Timeout - payment still pending after 10 minutes
+            logger.warning(f"User {user_telegram_id} | Payment {payment_id} timeout - still pending after 10 minutes")
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "⏱ <b>Время ожидания истекло</b>\n\n"
+                    "Мы проверяли статус вашего платежа в течение 10 минут, но он все еще находится в обработке.\n\n"
+                    "🔹 Обычно платежи обрабатываются быстрее, но иногда это может занять больше времени.\n"
+                    "🔹 Как только платеж будет подтвержден, фотосессии будут автоматически зачислены на ваш баланс.\n\n"
+                    "Если фотосессии не зачислены в течение 1 часа, пожалуйста, обратитесь в поддержку с номером платежа:\n"
+                    f"<code>{payment_id}</code>",
+                    parse_mode="HTML",
+                    reply_markup=get_support_contact_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"User {user_telegram_id} | Failed to send timeout notification: {str(e)}")
 
-    logger.info(f"User {user_telegram_id} | Auto-check for payment {payment_id} finished with status: {final_status}")
+        logger.info(f"User {user_telegram_id} | Auto-check for payment {payment_id} finished with status: {final_status}")
+
+    except asyncio.CancelledError:
+        logger.info(f"User {user_telegram_id} | Auto-check for payment {payment_id} was cancelled by user")
+        raise  # Re-raise to properly cancel the task
+
+    finally:
+        # Clean up: remove from active checks
+        if payment_id in active_payment_checks:
+            del active_payment_checks[payment_id]
+            logger.debug(f"Payment {payment_id} removed from active_payment_checks")
 
 
 async def notify_payment_success(bot, order_id: int):
