@@ -1,7 +1,12 @@
 import asyncio
 import logging
+import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from alembic.config import Config
+from alembic import command
 
 from app.config import settings
 from app.database import init_db
@@ -17,20 +22,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def notify_admins(message: str):
+    """Notify admins about critical errors"""
+    try:
+        # Create a temporary bot instance just for sending this message
+        bot = Bot(
+            token=settings.BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        )
+        for admin_id in settings.admin_ids_list:
+            try:
+                await bot.send_message(chat_id=admin_id, text=message)
+                logger.info(f"Admin {admin_id} notified about error.")
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
+        await bot.session.close()
+    except Exception as e:
+        logger.error(f"Failed to initialize bot for notification: {e}")
+
+
+def run_migrations():
+    """Run Alembic migrations"""
+    logger.info("Running database migrations...")
+    try:
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Migrations completed successfully")
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        raise e
+
+
 async def main():
     """Main bot function"""
     # Initialize database
     logger.info("Initializing database...")
     db = init_db(settings.database_url)
 
-    # Create tables if they don't exist
+    # Note: Tables are created via Alembic migrations (run_migrations)
+    # create_tables() is kept as a fallback or for specific dev setups, 
+    # but strictly speaking shouldn't be needed if migrations run.
+    # We'll leave it in a try/except but it might be redundant.
     try:
         await db.create_tables()
-        logger.info("Database initialized successfully")
+        logger.info("Database tables check/creation passed")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        return
-
+        logger.error(f"Database table check failed (might be handled by migrations): {e}")
+        # We don't return here, assuming migrations might have worked or it's a non-critical check failure
+    
     # Synchronize packages from config to database
     try:
         from app.database.crud import sync_packages_from_config
@@ -42,7 +81,10 @@ async def main():
         # Don't return - continue even if packages sync fails
 
     # Initialize bot and dispatcher
-    bot = Bot(token=settings.BOT_TOKEN)
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
@@ -72,6 +114,9 @@ async def main():
         logger.info("Metrika upload task skipped (Metrika is disabled)")
 
     logger.info("Bot started successfully")
+    
+    # Notify admins about startup
+    # await notify_admins("✅ Bot started successfully") # Optional, might be spammy on restart loops
 
     try:
         # Start polling
@@ -89,8 +134,17 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        # Run migrations before starting the async loop
+        run_migrations()
+        
+        # Start the bot
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Bot stopped with error: {e}")
+        logger.critical(f"Critical error: {e}", exc_info=True)
+        try:
+            asyncio.run(notify_admins(f"🚨 <b>BOT CRITICAL ERROR</b> 🚨\n\n<pre>{str(e)}</pre>"))
+        except Exception as notify_error:
+            logger.error(f"Failed to send error notification: {notify_error}")
+        sys.exit(1)

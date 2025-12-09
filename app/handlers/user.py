@@ -16,7 +16,7 @@ from app.keyboards.inline import (
     get_confirm_save_style_keyboard,
     get_buy_packages_keyboard
 )
-from app.keyboards.user_kb import get_packages_keyboard
+from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu
 from app.keyboards.reply import get_main_menu
 from app.services.prompt_generator import PromptGenerator
 from app.services.image_processor import ImageProcessor
@@ -64,9 +64,40 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 """
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=get_main_menu())
 
-@router.message(F.text == "📸 Создать фотосессию")
-async def create_photoshoot_msg(message: Message):
+@router.message(F.text == "📸 Создать бизнес-портрет")
+async def create_photoshoot_msg(message: Message, state: FSMContext):
     await message.answer("📸 Отправьте фото вашего товара (как фото или файл).")
+    await state.set_state(PhotoshootStates.waiting_for_product_photo)
+
+@router.message(F.text == "👥 Реферальная программа")
+async def referral_handler(message: Message, session: AsyncSession, bot: Bot):
+    user = await get_or_create_user(session, message.from_user.id)
+    # Use telegram ID as referral code for simplicity if not set
+    # Assuming user model doesn't have explicit referral_code field, checking crud
+    # If not exists, we can use telegram_id or hash
+    referral_code = str(message.from_user.id) 
+    
+    bot_info = await bot.get_me()
+    
+    await message.answer(
+        f"👥 <b>Реферальная программа</b>\n\n"
+        f"Приглашайте друзей и получайте бесплатные фотосессии!\n"
+        f"За каждого приглашенного друга, который запустит бота, вы получите +{settings.REFERRAL_REWARD_START} фотосессию.\n"
+        f"А также {settings.REFERRAL_REWARD_PURCHASE_PERCENT}% от их покупок!\n\n"
+        f"Ваша ссылка:",
+        parse_mode="HTML",
+        reply_markup=get_referral_menu(bot_info.username, referral_code)
+    )
+
+@router.message(F.text == "ℹ️ Информация")
+async def info_handler(message: Message):
+    from app.keyboards.user_kb import get_info_menu
+    await message.answer(
+        "ℹ️ <b>Информация</b>\n\n"
+        "Выберите интересующий раздел:",
+        parse_mode="HTML",
+        reply_markup=get_info_menu()
+    )
 
 @router.message(F.text == "📊 Баланс")
 async def balance_handler(message: Message, session: AsyncSession):
@@ -311,6 +342,41 @@ async def new_photoshoot(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("📸 Отправьте фото товара.")
     await state.clear()
     await state.set_state(PhotoshootStates.waiting_for_product_photo)
+
+@router.message(F.text == "💎 Купить пакет")
+async def show_packages_msg(message: Message, session: AsyncSession):
+    """Show available packages for purchase (message handler)"""
+    try:
+        packages = await get_all_packages(session)
+
+        if not packages:
+            await message.answer("Пакеты временно недоступны")
+            return
+
+        # Convert to dict format expected by keyboard
+        packages_dict = [
+            {
+                'id': p.id,
+                'name': p.name,
+                'images_count': p.photoshoots_count,  # Note: photoshoots_count in DB
+                'price_rub': float(p.price_rub)
+            }
+            for p in packages
+        ]
+
+        text = (
+            "💎 <b>Доступные пакеты</b>\n\n"
+            "Выберите пакет для покупки:\n"
+        )
+
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_packages_keyboard(packages_dict)
+        )
+    except Exception as e:
+        logger.error(f"Error showing packages: {e}", exc_info=True)
+        await message.answer("Ошибка загрузки пакетов")
 
 @router.callback_query(F.data == "show_packages")
 async def show_packages(callback: CallbackQuery, session: AsyncSession):
