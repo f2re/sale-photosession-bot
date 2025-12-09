@@ -5,6 +5,7 @@ Generates 4 structured style prompts using Claude via OpenRouter
 import logging
 import aiohttp
 import json
+import re
 from typing import Dict, List, Optional
 from app.config import settings
 
@@ -389,6 +390,44 @@ Be maximally creative! Use different:
         self.model = settings.PROMPT_MODEL
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
     
+    def _extract_json_from_response(self, content: str) -> str:
+        """
+        Extract JSON from response that might be wrapped in markdown code blocks.
+        
+        Handles:
+        - ```json ... ```
+        - ``` ... ```
+        - Raw JSON
+        
+        Args:
+            content: Raw response content
+            
+        Returns:
+            Clean JSON string
+        """
+        # Try to extract from markdown code blocks
+        # Pattern 1: ```json ... ```
+        json_match = re.search(r'```json\s*\n?(.+?)\n?```', content, re.DOTALL)
+        if json_match:
+            logger.debug("Extracted JSON from ```json code block")
+            return json_match.group(1).strip()
+        
+        # Pattern 2: ``` ... ``` (without language specifier)
+        code_match = re.search(r'```\s*\n?(.+?)\n?```', content, re.DOTALL)
+        if code_match:
+            logger.debug("Extracted JSON from ``` code block")
+            return code_match.group(1).strip()
+        
+        # Pattern 3: Try to find JSON object directly
+        json_obj_match = re.search(r'\{.+\}', content, re.DOTALL)
+        if json_obj_match:
+            logger.debug("Found JSON object in response")
+            return json_obj_match.group(0).strip()
+        
+        # Return as-is if no patterns matched
+        logger.debug("No markdown wrapper found, returning content as-is")
+        return content.strip()
+    
     async def generate_styles_from_description(
         self,
         product_description: str,
@@ -466,11 +505,18 @@ Return result STRICTLY in JSON format."""
                         
                         # Parse JSON
                         try:
-                            logger.debug(f"LLM raw response: {content}")
-                            data = json.loads(content)
+                            logger.debug(f"LLM raw response (first 200 chars): {content[:200]}...")
+                            
+                            # Extract JSON from potential markdown wrapper
+                            clean_json = self._extract_json_from_response(content)
+                            logger.debug(f"Clean JSON (first 200 chars): {clean_json[:200]}...")
+                            
+                            # Parse the cleaned JSON
+                            data = json.loads(clean_json)
                             
                             # Validate structure
                             if not self._validate_response(data):
+                                logger.warning(f"Invalid JSON structure: {data}")
                                 raise ValueError("Invalid JSON structure")
                             
                             logger.info(f"Successfully generated styles for: {data.get('product_name', 'unknown')}")
@@ -485,6 +531,7 @@ Return result STRICTLY in JSON format."""
                         except json.JSONDecodeError as e:
                             logger.error(f"Failed to parse JSON response: {e}")
                             logger.debug(f"Response content: {content}")
+                            logger.warning("Using fallback prompts")
                             return self._fallback_response(product_description, aspect_ratio)
                     
                     else:
@@ -498,13 +545,23 @@ Return result STRICTLY in JSON format."""
     
     def _validate_response(self, data: dict) -> bool:
         """Validate JSON structure"""
-        if not isinstance(data, dict): return False
-        if "product_name" not in data or "styles" not in data: return False
-        if not isinstance(data["styles"], list) or len(data["styles"]) != 4: return False
+        if not isinstance(data, dict): 
+            logger.warning("Response is not a dictionary")
+            return False
+        if "product_name" not in data or "styles" not in data: 
+            logger.warning(f"Missing required fields. Keys: {data.keys()}")
+            return False
+        if not isinstance(data["styles"], list) or len(data["styles"]) != 4: 
+            logger.warning(f"Invalid styles array. Type: {type(data['styles'])}, Length: {len(data['styles']) if isinstance(data['styles'], list) else 'N/A'}")
+            return False
         
-        for style in data["styles"]:
-            if not isinstance(style, dict): return False
-            if "style_name" not in style or "prompt" not in style: return False
+        for i, style in enumerate(data["styles"]):
+            if not isinstance(style, dict): 
+                logger.warning(f"Style {i} is not a dictionary")
+                return False
+            if "style_name" not in style or "prompt" not in style: 
+                logger.warning(f"Style {i} missing required fields. Keys: {style.keys()}")
+                return False
         
         return True
     
