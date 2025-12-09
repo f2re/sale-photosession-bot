@@ -436,25 +436,38 @@ async def save_style_name(message: Message, state: FSMContext, session: AsyncSes
     res = await StyleManager.save_style(
         session, message.from_user.id, name, data.get("product_name", "Product"), data.get("aspect_ratio", "1:1"), styles_to_save
     )
-    
+
     if res["success"]:
-        # Different reply markup depending on context
-        markup = get_post_generation_keyboard(True) if data.get("last_generated") else get_style_selection_keyboard()
-        await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
+        # Check context: are we working with a photo?
+        has_photo = bool(data.get("product_image_bytes"))
+        has_generated = data.get("last_generated")
+
+        if has_generated:
+            # After generation - show post-generation menu
+            markup = get_post_generation_keyboard(True)
+            await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
+            await state.set_state(PhotoshootStates.generating_photoshoot)
+        elif has_photo:
+            # Working with photo but haven't generated yet - return to style preview
+            product_name = data.get("product_name", "Product")
+            styles = data.get("styles", [])
+            text = _format_styles_preview(styles)
+
+            await message.answer(
+                f"✅ Стиль '<b>{name}</b>' успешно сохранен!\n\n"
+                f"✨ <b>Текущие стили:</b>\n📦 {product_name}\n\n{text}",
+                parse_mode="HTML",
+                reply_markup=get_style_preview_keyboard(True, product_name)
+            )
+            await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+        else:
+            # No photo context - return to style selection
+            markup = get_style_selection_keyboard()
+            await message.answer(f"✅ Стиль '<b>{name}</b>' успешно сохранен!", parse_mode="HTML", reply_markup=markup)
+            await state.set_state(PhotoshootStates.selecting_styles_method)
     else:
         logger.error(f"Failed to save style: {res['error']}")
         await message.answer(f"❌ Ошибка: {res['error']}")
-    
-    # Don't clear state completely if we want to allow "Create more", 
-    # but usually saving finishes the "save" interaction.
-    # We should keep the main context if possible.
-    # await state.clear() 
-    # Instead of clearing everything, just unset the specific saving state
-    # returning to the previous logical state
-    if data.get("last_generated"):
-        await state.set_state(PhotoshootStates.generating_photoshoot)
-    else:
-        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 @router.callback_query(F.data == "cancel_action")
 async def cancel_handler(callback: CallbackQuery, state: FSMContext):
