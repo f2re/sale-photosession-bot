@@ -10,7 +10,7 @@ from alembic import command
 
 from app.config import settings
 from app.database import init_db
-from app.handlers import user, admin, payment, support, batch_processing, style_management
+from app.handlers import user, admin, payment, support, batch_processing, style_management, custom_styles
 from app.services.yandex_metrika import periodic_metrika_upload
 from app.middlewares import DbSessionMiddleware
 
@@ -99,8 +99,10 @@ async def main():
     # Register routers
     # IMPORTANT: batch_processing must be registered BEFORE user router
     # to handle media groups (albums) before single images
+    # custom_styles should be before user to handle custom style callbacks first
     dp.include_router(batch_processing.router)
     dp.include_router(style_management.router)
+    dp.include_router(custom_styles.router)
     dp.include_router(user.router)
     dp.include_router(admin.router)
     dp.include_router(payment.router)
