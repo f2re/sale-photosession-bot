@@ -319,6 +319,7 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
         successful_count = 0
         failed_count = 0
 
+        style_names = []
         for i, img in enumerate(res["images"]):
             if img.get("success"):
                 try:
@@ -327,11 +328,9 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
                         img["image_bytes"],
                         filename=f"photoshoot_{i}_{img['style_name']}.png"
                     )
-                    media.append(InputMediaPhoto(
-                        media=input_file,
-                        caption=f"Style: {img['style_name']}" if i==0 else None
-                    ))
+                    media.append(InputMediaPhoto(media=input_file))
                     await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], data["aspect_ratio"])
+                    style_names.append(img['style_name'])
                     successful_count += 1
                 except Exception as e:
                     logger.error(f"Error preparing image {i}: {e}", exc_info=True)
@@ -345,8 +344,17 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
             try:
                 await callback.message.answer_media_group(media)
 
-                # Create summary message
+                # Create summary message with all styles
                 summary = "✅ Готово!"
+
+                if style_names:
+                    if len(style_names) == 1:
+                        summary += f"\n\n🎨 Стиль: {style_names[0]}"
+                    else:
+                        summary += "\n\n🎨 Стили:\n"
+                        for idx, style in enumerate(style_names, 1):
+                            summary += f"{idx}. {style}\n"
+
                 if failed_count > 0:
                     summary += f"\n⚠️ {failed_count} из {successful_count + failed_count} изображений не удалось сгенерировать"
 
