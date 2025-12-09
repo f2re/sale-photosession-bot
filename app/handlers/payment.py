@@ -36,12 +36,12 @@ async def buy_package_handler(callback: CallbackQuery, state: FSMContext, sessio
     """Handle package purchase request - start contact collection flow"""
     try:
         package_id = int(callback.data.split(":")[1])
-        logger.info(f"User {callback.from_user.id} requested package {package_id}")
+        logger.info(f"User {callback.from_user.id} | Requested package {package_id}")
 
         package = await get_package_by_id(session, package_id)
 
         if not package:
-            logger.warning(f"Package {package_id} not found")
+            logger.warning(f"User {callback.from_user.id} | Package {package_id} not found")
             await callback.answer("❌ Пакет не найден", show_alert=True)
             return
 
@@ -49,15 +49,17 @@ async def buy_package_handler(callback: CallbackQuery, state: FSMContext, sessio
         await state.update_data(
             package_id=package_id,
             package_name=package.name,
-            images_count=package.images_count,
+            images_count=package.photoshoots_count,  # Fixed: use photoshoots_count
             price_rub=float(package.price_rub)
         )
         await state.set_state(PaymentStates.waiting_for_contact)
+        
+        logger.info(f"User {callback.from_user.id} | Package info saved to state: {package.name}, {package.photoshoots_count} photoshoots, {package.price_rub}₽")
 
         # Ask for contact info in friendly way
         text = (
             f"💎 <b>Покупка пакета: {package.name}</b>\n\n"
-            f"📦 Изображений: {package.images_count}\n"
+            f"📦 Фотосессий: {package.photoshoots_count}\n"
             f"💰 Стоимость: {package.price_rub}₽\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "📧 <b>Получение чека об оплате</b>\n\n"
@@ -68,11 +70,16 @@ async def buy_package_handler(callback: CallbackQuery, state: FSMContext, sessio
             "🔒 <i>Ваши данные в безопасности и используются только для отправки чека в соответствии с законодательством.</i>"
         )
 
-        # Edit the inline message and send keyboard as new message
-        await callback.message.edit_text(
-            text,
-            parse_mode="HTML"
-        )
+        # Edit the inline message
+        try:
+            await callback.message.edit_text(
+                text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"User {callback.from_user.id} | Failed to edit message: {e}")
+            # If edit fails, send new message
+            await callback.message.answer(text, parse_mode="HTML")
 
         # Send keyboard with contact options
         await callback.message.answer(
@@ -80,9 +87,11 @@ async def buy_package_handler(callback: CallbackQuery, state: FSMContext, sessio
             reply_markup=get_payment_contact_keyboard()
         )
         await callback.answer()
+        
+        logger.info(f"User {callback.from_user.id} | Contact selection keyboard sent")
 
     except Exception as e:
-        logger.error(f"Error in buy_package_handler: {e}", exc_info=True)
+        logger.error(f"User {callback.from_user.id} | Error in buy_package_handler: {e}", exc_info=True)
         await callback.answer("❌ Произошла ошибка", show_alert=True)
         try:
             await callback.message.answer("❌ Произошла ошибка при выборе пакета. Пожалуйста, попробуйте позже.")
@@ -95,21 +104,24 @@ async def process_contact_shared(message: Message, state: FSMContext, session: A
     """Handle phone contact shared by user"""
     try:
         phone = message.contact.phone_number
+        logger.info(f"User {message.from_user.id} | Shared phone contact")
 
         # Normalize phone number to YooKassa format
         normalized_phone = normalize_phone_number(phone)
+        logger.info(f"User {message.from_user.id} | Normalized phone: {normalized_phone}")
 
         # Save to state and proceed to payment creation
         await state.update_data(user_phone=normalized_phone)
         await create_payment_with_contact(message, state, session)
     except Exception as e:
-        logger.error(f"Error in process_contact_shared: {e}", exc_info=True)
+        logger.error(f"User {message.from_user.id} | Error in process_contact_shared: {e}", exc_info=True)
         await message.answer("❌ Произошла ошибка. Попробуйте снова.")
 
 
 @router.message(PaymentStates.waiting_for_contact, F.text == "📧 Через Email")
 async def request_manual_email(message: Message, state: FSMContext):
     """Handle manual email input request"""
+    logger.info(f"User {message.from_user.id} | Requested manual email input")
     await state.set_state(PaymentStates.waiting_for_email)
 
     await message.answer(
@@ -126,9 +138,11 @@ async def process_manual_email(message: Message, state: FSMContext, session: Asy
     """Handle manual email input and validation"""
     try:
         email = message.text.strip()
+        logger.info(f"User {message.from_user.id} | Provided email: {email}")
 
         # Validate email format
         if not validate_email(email):
+            logger.warning(f"User {message.from_user.id} | Invalid email format: {email}")
             await message.answer(
                 "❌ <b>Неверный формат email</b>\n\n"
                 "Пожалуйста, введите корректный email адрес.\n\n"
@@ -138,11 +152,12 @@ async def process_manual_email(message: Message, state: FSMContext, session: Asy
             )
             return
 
+        logger.info(f"User {message.from_user.id} | Email validated successfully")
         # Save to state and proceed to payment creation
         await state.update_data(user_email=email)
         await create_payment_with_contact(message, state, session)
     except Exception as e:
-        logger.error(f"Error in process_manual_email: {e}", exc_info=True)
+        logger.error(f"User {message.from_user.id} | Error in process_manual_email: {e}", exc_info=True)
         await message.answer("❌ Произошла ошибка. Попробуйте снова.")
 
 
@@ -160,10 +175,12 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
     package_id = data.get("package_id")
     user_email = data.get("user_email")
     user_phone = data.get("user_phone")
+    
+    logger.info(f"User {message.from_user.id} | Creating payment | Package: {package_id} | Email: {bool(user_email)} | Phone: {bool(user_phone)}")
 
     # Validate that contact info is provided (required by 54-ФЗ)
     if not user_email and not user_phone:
-        logger.error(f"Payment creation attempted without contact info for user {message.from_user.id}")
+        logger.error(f"User {message.from_user.id} | Payment creation attempted without contact info")
         await message.answer(
             "❌ <b>Ошибка создания платежа</b>\n\n"
             "Для проведения оплаты необходимо предоставить email или номер телефона для получения чека (требование 54-ФЗ).\n\n"
@@ -178,6 +195,7 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
         package = await get_package_by_id(session, package_id)
 
         if not package:
+            logger.error(f"User {message.from_user.id} | Package {package_id} not found")
             await message.answer(
                 "❌ Пакет не найден. Попробуйте еще раз.",
                 reply_markup=ReplyKeyboardRemove()
@@ -187,6 +205,7 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
 
         # Generate unique order ID for YooKassa metadata
         order_id_str = f"order_{message.from_user.id}_{int(time.time())}"
+        logger.info(f"User {message.from_user.id} | Generated order_id: {order_id_str}")
 
         # Create order in database (temporarily without payment_id)
         order = await create_order(
@@ -196,10 +215,14 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
             invoice_id=order_id_str,
             amount=float(package.price_rub)
         )
+        logger.info(f"User {message.from_user.id} | Order created in DB: order.id={order.id}")
 
         try:
             # Create payment via YooKassa with contact info
+            logger.info(f"User {message.from_user.id} | Initializing YooKassa service...")
             yookassa = YookassaService()
+            
+            logger.info(f"User {message.from_user.id} | Creating payment via YooKassa API...")
             payment_info = yookassa.create_payment(
                 amount=float(package.price_rub),
                 description=f"Покупка пакета: {package.name}",
@@ -207,10 +230,13 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
                 user_email=user_email,
                 user_phone=user_phone
             )
+            
+            logger.info(f"User {message.from_user.id} | Payment created successfully | payment_id: {payment_info['payment_id']} | status: {payment_info['status']}")
 
             # Update order with YooKassa payment_id
             order.invoice_id = payment_info["payment_id"]
             await session.commit()
+            logger.info(f"User {message.from_user.id} | Order updated with payment_id: {payment_info['payment_id']}")
 
             payment_url = payment_info["confirmation_url"]
 
@@ -231,11 +257,11 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
             text = (
                 f"✅ <b>Платёж создан</b>\n\n"
                 f"💎 Пакет: {package.name}\n"
-                f"📦 Изображений: {package.images_count}\n"
+                f"📦 Фотосессий: {package.photoshoots_count}\n"
                 f"💰 Стоимость: {package.price_rub}₽\n"
                 f"{receipt_info}\n\n"
                 "Нажмите кнопку ниже для перехода к оплате.\n\n"
-                "После успешной оплаты изображения будут автоматически начислены на ваш баланс."
+                "После успешной оплаты фотосессии будут автоматически начислены на ваш баланс."
             )
 
             await message.answer(
@@ -250,6 +276,8 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
                 reply_markup=ReplyKeyboardRemove()
             )
 
+            logger.info(f"User {message.from_user.id} | Payment confirmation sent")
+
             # Start automatic payment checking in background
             from app.services.payment_checker import PaymentChecker
 
@@ -257,6 +285,7 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
             bot = message.bot
 
             # Create background task for automatic payment checking
+            logger.info(f"User {message.from_user.id} | Starting auto payment checker...")
             asyncio.create_task(
                 auto_check_and_notify(
                     payment_id=payment_info["payment_id"],
@@ -266,17 +295,27 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
                 )
             )
 
+        except ValueError as e:
+            # ValueError is raised when no contact info provided - should not happen here
+            logger.error(f"User {message.from_user.id} | ValueError during payment creation: {e}", exc_info=True)
+            order.status = "failed"
+            await session.commit()
+
+            await message.answer(
+                "❌ <b>Ошибка при создании платежа</b>\n\n"
+                f"{str(e)}",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            await state.clear()
+
         except Exception as e:
             # Mark order as failed
-            # Use a new transaction if the current one is broken? 
-            # Actually, session is passed from middleware, so we should be careful.
-            # But usually we can just set status and commit.
+            logger.error(f"User {message.from_user.id} | Payment creation failed: {type(e).__name__}: {str(e)}", exc_info=True)
             order.status = "failed"
             await session.commit()
 
             # Show user-friendly error message
-            logger.error(f"Payment creation error details: {str(e)}", exc_info=True)
-
             error_text = (
                 "❌ <b>Ошибка при создании платежа</b>\n\n"
                 "К сожалению, не удалось создать платёж. "
@@ -292,7 +331,7 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
             await state.clear()
 
     except Exception as e:
-        logger.error(f"Critical error in create_payment_with_contact: {e}", exc_info=True)
+        logger.error(f"User {message.from_user.id} | Critical error in create_payment_with_contact: {e}", exc_info=True)
         await message.answer("❌ Критическая ошибка при создании платежа.")
         await state.clear()
 
@@ -301,6 +340,8 @@ async def create_payment_with_contact(message: Message, state: FSMContext, sessi
 async def cancel_payment_handler(callback: CallbackQuery, state: FSMContext):
     """Handle payment cancellation"""
     from aiogram.types import ReplyKeyboardRemove
+    
+    logger.info(f"User {callback.from_user.id} | Payment cancelled by user")
 
     await state.clear()
     await callback.message.edit_text(
@@ -324,6 +365,7 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
     from app.services.payment_checker import PaymentChecker
 
     payment_id = callback.data.split(":")[1]
+    logger.info(f"User {callback.from_user.id} | Manual payment check requested | payment_id: {payment_id}")
 
     # Show processing message
     await callback.answer("🔄 Проверяем статус платежа...", show_alert=False)
@@ -341,6 +383,7 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
     payment_info = await checker.check_payment_status(payment_id)
 
     if not payment_info:
+        logger.warning(f"User {callback.from_user.id} | Failed to get payment status for {payment_id}")
         await callback.message.edit_text(
             "❌ <b>Ошибка проверки платежа</b>\n\n"
             "Не удалось получить статус платежа. Попробуйте еще раз через несколько секунд.\n\n"
@@ -351,6 +394,7 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
         return
 
     status = payment_info['status']
+    logger.info(f"User {callback.from_user.id} | Payment status: {status} | paid: {payment_info.get('paid')}")
 
     if status == 'succeeded' and payment_info.get('paid'):
         # Payment successful! Process it
@@ -361,14 +405,16 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
         )
 
         if success:
+            logger.info(f"User {callback.from_user.id} | Payment processed successfully")
             await state.clear()
             await callback.message.edit_text(
                 "✅ <b>Оплата подтверждена!</b>\n\n"
-                "Пакеты успешно зачислены на ваш баланс.\n"
-                "Можете приступать к обработке изображений!",
+                "Фотосессии успешно зачислены на ваш баланс.\n"
+                "Можете приступать к созданию фотосессий!",
                 parse_mode="HTML"
             )
         else:
+            logger.error(f"User {callback.from_user.id} | Payment succeeded but processing failed")
             await callback.message.edit_text(
                 "⚠️ <b>Платеж получен, но возникла проблема</b>\n\n"
                 "Платеж успешно проведен, но произошла ошибка при зачислении пакета.\n\n"
@@ -379,6 +425,7 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
             )
 
     elif status == 'pending' or status == 'waiting_for_capture':
+        logger.info(f"User {callback.from_user.id} | Payment still pending")
         await callback.message.edit_text(
             "⏳ <b>Платеж в обработке</b>\n\n"
             "Ваш платеж еще обрабатывается. Обычно это занимает 1-3 минуты.\n\n"
@@ -393,6 +440,7 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
         )
 
     elif status == 'canceled':
+        logger.info(f"User {callback.from_user.id} | Payment canceled")
         await state.clear()
         await callback.message.edit_text(
             "❌ <b>Платеж отменен</b>\n\n"
@@ -403,6 +451,7 @@ async def check_payment_button_handler(callback: CallbackQuery, state: FSMContex
         )
 
     else:
+        logger.warning(f"User {callback.from_user.id} | Unknown payment status: {status}")
         await callback.message.edit_text(
             f"ℹ️ <b>Статус платежа: {status}</b>\n\n"
             "Платеж находится в необычном статусе.\n\n"
@@ -435,7 +484,7 @@ async def auto_check_and_notify(
 
     logger = logging.getLogger(__name__)
 
-    logger.info(f"Starting auto-check for payment {payment_id}")
+    logger.info(f"User {user_telegram_id} | Starting auto-check for payment {payment_id}")
 
     checker = PaymentChecker()
 
@@ -450,9 +499,10 @@ async def auto_check_and_notify(
     # Send notification based on final status
     if final_status == 'succeeded':
         # User already notified by process_successful_payment
-        logger.info(f"Payment {payment_id} auto-check completed: succeeded")
+        logger.info(f"User {user_telegram_id} | Payment {payment_id} auto-check completed: succeeded")
 
     elif final_status == 'canceled':
+        logger.info(f"User {user_telegram_id} | Payment {payment_id} canceled")
         try:
             await bot.send_message(
                 chat_id,
@@ -462,26 +512,27 @@ async def auto_check_and_notify(
                 parse_mode="HTML"
             )
         except Exception as e:
-            logger.error(f"Failed to send cancellation notification: {str(e)}")
+            logger.error(f"User {user_telegram_id} | Failed to send cancellation notification: {str(e)}")
 
     elif final_status is None:
         # Timeout - payment still pending after 10 minutes
+        logger.warning(f"User {user_telegram_id} | Payment {payment_id} timeout - still pending after 10 minutes")
         try:
             await bot.send_message(
                 chat_id,
                 "⏱ <b>Время ожидания истекло</b>\n\n"
                 "Мы проверяли статус вашего платежа в течение 10 минут, но он все еще находится в обработке.\n\n"
                 "🔹 Обычно платежи обрабатываются быстрее, но иногда это может занять больше времени.\n"
-                "🔹 Как только платеж будет подтвержден, пакеты будут автоматически зачислены на ваш баланс.\n\n"
-                "Если пакеты не зачислены в течение 1 часа, пожалуйста, обратитесь в поддержку с номером платежа:\n"
+                "🔹 Как только платеж будет подтвержден, фотосессии будут автоматически зачислены на ваш баланс.\n\n"
+                "Если фотосессии не зачислены в течение 1 часа, пожалуйста, обратитесь в поддержку с номером платежа:\n"
                 f"<code>{payment_id}</code>",
                 parse_mode="HTML",
                 reply_markup=get_support_contact_keyboard()
             )
         except Exception as e:
-            logger.error(f"Failed to send timeout notification: {str(e)}")
+            logger.error(f"User {user_telegram_id} | Failed to send timeout notification: {str(e)}")
 
-    logger.info(f"Auto-check for payment {payment_id} finished with status: {final_status}")
+    logger.info(f"User {user_telegram_id} | Auto-check for payment {payment_id} finished with status: {final_status}")
 
 
 async def notify_payment_success(bot, order_id: int):
@@ -510,7 +561,10 @@ async def notify_payment_success(bot, order_id: int):
         order = result.scalar_one_or_none()
 
         if not order:
+            logger.error(f"Order {order_id} not found for notification")
             return
+
+        logger.info(f"User {order.user.telegram_id} | Sending payment success notifications | order_id: {order_id}")
 
         # Track purchase event to database and Yandex Metrika
         await metrika_service.track_event(
@@ -529,7 +583,7 @@ async def notify_payment_success(bot, order_id: int):
             bot=bot,
             telegram_id=order.user.telegram_id,
             package_name=order.package.name,
-            images_count=order.package.images_count,
+            images_count=order.package.photoshoots_count,
             amount=float(order.amount),
             new_balance=new_balance
         )
@@ -540,10 +594,12 @@ async def notify_payment_success(bot, order_id: int):
             user_telegram_id=order.user.telegram_id,
             username=order.user.username,
             package_name=order.package.name,
-            images_count=order.package.images_count,
+            images_count=order.package.photoshoots_count,
             amount=float(order.amount),
             order_id=order.id
         )
+
+        logger.info(f"User {order.user.telegram_id} | Payment success notifications sent")
 
 
 async def process_payment_webhook(notification_data: dict, bot=None) -> bool:
@@ -574,6 +630,7 @@ async def process_payment_webhook(notification_data: dict, bot=None) -> bool:
         return False
 
     payment_id = payment_info["payment_id"]
+    logger.info(f"Processing webhook for payment {payment_id} | status: succeeded")
 
     # Mark order as paid
     db = get_db()
