@@ -15,11 +15,15 @@ from app.services.yandex_metrika import periodic_metrika_upload
 from app.middlewares import DbSessionMiddleware
 
 # Setup logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
+def setup_logging():
+    logging.basicConfig(
+        level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        stream=sys.stdout,
+        force=True
+    )
+
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -138,6 +142,9 @@ if __name__ == "__main__":
     try:
         # Run migrations before starting the async loop
         run_migrations()
+        
+        # Restore logging configuration after migrations (Alembic resets it)
+        setup_logging()
         
         # Start the bot
         asyncio.run(main())
