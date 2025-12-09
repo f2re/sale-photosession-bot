@@ -505,7 +505,7 @@ Return result STRICTLY in JSON format."""
                         
                         # Parse JSON
                         try:
-                            logger.debug(f"LLM raw response (first 200 chars): {content[:200]}...")
+                            logger.debug(f"LLM raw response (first 200 chars): {content}")
                             
                             # Extract JSON from potential markdown wrapper
                             clean_json = self._extract_json_from_response(content)
