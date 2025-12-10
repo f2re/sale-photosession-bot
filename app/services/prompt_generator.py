@@ -432,15 +432,17 @@ Be maximally creative! Use different:
         self,
         product_description: str,
         aspect_ratio: str = "1:1",
-        random: bool = False
+        random: bool = False,
+        num_styles: int = 4
     ) -> Dict:
         """
-        Generates 4 styles for the product
+        Generates specified number of styles for the product
 
         Args:
             product_description: Product description or "product from image"
             aspect_ratio: Aspect ratio (1:1, 3:4, etc.)
             random: If True, generates random creative styles
+            num_styles: Number of styles to generate (1-4)
 
         Returns:
             {
@@ -461,10 +463,11 @@ Be maximally creative! Use different:
 
             user_prompt = f"""Product: {product_text}
 Aspect Ratio: {aspect_ratio}
+Number of styles: {num_styles}
 
-{"Create 4 RANDOM, maximally DIFFERENT and CREATIVE styles with various angles and lighting!" if random else "Create 4 distinct professional styles (Lifestyle, Studio, Creative, Minimalist) with diverse lighting and angles."}
+{"Create " + str(num_styles) + " RANDOM, maximally DIFFERENT and CREATIVE styles with various angles and lighting!" if random else "Create " + str(num_styles) + " distinct professional styles with diverse lighting and angles."}
 
-Return result STRICTLY in JSON format."""
+Return result STRICTLY in JSON format with exactly {num_styles} styles."""
 
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -515,7 +518,7 @@ Return result STRICTLY in JSON format."""
                             data = json.loads(clean_json)
 
                             # Validate structure
-                            if not self._validate_response(data):
+                            if not self._validate_response(data, num_styles):
                                 logger.warning(f"Invalid JSON structure: {data}")
                                 raise ValueError("Invalid JSON structure")
 
@@ -543,16 +546,26 @@ Return result STRICTLY in JSON format."""
             logger.error(f"Error generating styles: {e}", exc_info=True)
             return self._fallback_response(product_description, aspect_ratio)
 
-    def _validate_response(self, data: dict) -> bool:
-        """Validate JSON structure"""
+    def _validate_response(self, data: dict, expected_count: int = 4) -> bool:
+        """Validate JSON structure
+
+        Args:
+            data: Response data to validate
+            expected_count: Expected number of styles (1-4)
+        """
         if not isinstance(data, dict):
             logger.warning("Response is not a dictionary")
             return False
         if "product_name" not in data or "styles" not in data:
             logger.warning(f"Missing required fields. Keys: {data.keys()}")
             return False
-        if not isinstance(data["styles"], list) or len(data["styles"]) != 4:
-            logger.warning(f"Invalid styles array. Type: {type(data['styles'])}, Length: {len(data['styles']) if isinstance(data['styles'], list) else 'N/A'}")
+        if not isinstance(data["styles"], list):
+            logger.warning(f"Invalid styles array. Type: {type(data['styles'])}")
+            return False
+
+        # Check if we have at least expected_count styles (allow more, will be trimmed)
+        if len(data["styles"]) < expected_count:
+            logger.warning(f"Not enough styles. Expected at least {expected_count}, got {len(data['styles'])}")
             return False
 
         for i, style in enumerate(data["styles"]):

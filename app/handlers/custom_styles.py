@@ -159,18 +159,19 @@ async def custom_style_count_select(callback: CallbackQuery, state: FSMContext):
         res = await prompt_generator.generate_styles_from_description(
             combined_description,
             aspect_ratio,
-            random=False
+            random=False,
+            num_styles=count  # Pass the requested count directly
         )
-        
+
         if not res["success"]:
             await msg.edit_text(
                 "❌ Ошибка генерации стилей.\n\nПопробуйте ещё раз или выберите другой метод:",
                 reply_markup=get_style_selection_keyboard()
             )
             return
-        
-        # Trim to requested count
-        styles = res["styles"][:count]
+
+        # Use all generated styles (should be exactly count)
+        styles = res["styles"][:count]  # Ensure we don't exceed requested count
         
         await state.update_data(
             product_name=product_name,

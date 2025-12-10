@@ -1,5 +1,6 @@
 "User Handlers"
 import logging
+import asyncio
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto, BufferedInputFile
@@ -302,9 +303,27 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
             return
 
         data = await state.get_data()
-        styles_count = len(data["styles"])
+        styles = data["styles"]
+        styles_count = len(styles)
+        aspect_ratio = data.get("aspect_ratio", "1:1")
+        product_name = data.get("product_name", "Товар")
 
-        msg = await callback.message.edit_text(f"🎨 Генерирую фотосессию ({styles_count} фото)... ⏳ ~1 мин")
+        # Show detailed generation parameters to user
+        params_text = f"🎨 <b>Параметры генерации:</b>\n\n"
+        params_text += f"📦 Товар: <b>{product_name}</b>\n"
+        params_text += f"📊 Пропорции: <b>{aspect_ratio}</b>\n"
+        params_text += f"🖼️ Количество фото: <b>{styles_count}</b>\n\n"
+        params_text += f"🎭 <b>Стили:</b>\n"
+        for i, style in enumerate(styles, 1):
+            params_text += f"{i}. {style['style_name']}\n"
+
+        # Show parameters
+        await callback.message.edit_text(params_text, parse_mode="HTML")
+        await asyncio.sleep(2)  # Give user time to see parameters
+
+        msg = await callback.message.edit_text(
+            f"🎨 Генерирую {styles_count} фото...\n⏳ Ожидайте ~1 мин"
+        )
 
         res = await image_processor.generate_photoshoot(
             data["product_image_bytes"], data["styles"], data["aspect_ratio"], bot, user, msg
@@ -347,22 +366,22 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
                 await callback.message.answer_media_group(media)
 
                 # Create summary message with all styles
-                summary = "✅ Готово!"
+                summary = "✅ <b>Готово!</b>\n\n"
+                summary += f"📊 <b>Результаты генерации:</b>\n"
+                summary += f"✅ Успешно: {successful_count}\n"
+                if failed_count > 0:
+                    summary += f"❌ Ошибок: {failed_count}\n"
+                summary += f"📐 Пропорции: {aspect_ratio}\n"
 
                 if style_names:
-                    if len(style_names) == 1:
-                        summary += f"\n\n🎨 Стиль: {style_names[0]}"
-                    else:
-                        summary += "\n\n🎨 Стили:\n"
-                        for idx, style in enumerate(style_names, 1):
-                            summary += f"{idx}. {style}\n"
-
-                if failed_count > 0:
-                    summary += f"\n⚠️ {failed_count} из {successful_count + failed_count} изображений не удалось сгенерировать"
+                    summary += f"\n🎨 <b>Стили:</b>\n"
+                    for idx, style in enumerate(style_names, 1):
+                        summary += f"{idx}. {style}\n"
 
                 await callback.message.answer(
                     summary,
-                    reply_markup=get_post_generation_keyboard(user.images_remaining > 0)
+                    reply_markup=get_post_generation_keyboard(user.images_remaining > 0),
+                    parse_mode="HTML"
                 )
             except Exception as e:
                 logger.error(f"Error sending media group: {e}", exc_info=True)
