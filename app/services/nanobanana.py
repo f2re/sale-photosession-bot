@@ -72,14 +72,16 @@ class NanoBananaService:
             )
 
             # Convert aspect ratio to format accepted by API (e.g., "1:1" -> "1:1")
-            # Some models might need "1024x1024" format, but let's try the ratio format first
             aspect_ratio_param = aspect_ratio if ":" in aspect_ratio else "1:1"
 
             # Payload for chat completion with image output
+            # Using image_config for Gemini 2.5 Flash as per OpenRouter documentation
             payload = {
                 "model": self.model,
                 "modalities": ["text", "image"],  # Required for image generation
-                "aspectRatio": aspect_ratio_param,  # Add aspect ratio as API parameter
+                "image_config": {
+                    "aspect_ratio": aspect_ratio_param  # Correct parameter structure for Gemini
+                },
                 "messages": [
                     {
                         "role": "system",
@@ -91,8 +93,8 @@ class NanoBananaService:
                             {
                                 "type": "text",
                                 "text": f"Generate an image of this product based on this description: {prompt}. "
-                                        f"IMPORTANT: Image must be in {aspect_ratio_param} aspect ratio. "
-                                        f"Keep the product look consistent with the reference."
+                                        f"Keep the product look consistent with the reference. "
+                                        f"Maintain high quality and professional composition."
                             },
                             {
                                 "type": "image_url",
