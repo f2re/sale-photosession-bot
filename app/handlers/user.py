@@ -170,6 +170,84 @@ async def info_handler(message: Message):
         reply_markup=get_info_menu()
     )
 
+@router.callback_query(F.data == "info_how_it_works")
+async def info_how_it_works_handler(callback: CallbackQuery):
+    """Show 'How it works' information"""
+    from app.data import get_info_text
+    from app.keyboards.user_kb import get_back_to_info_keyboard
+
+    await callback.message.edit_text(
+        get_info_text("how_it_works"),
+        parse_mode="HTML",
+        reply_markup=get_back_to_info_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "info_faq")
+async def info_faq_handler(callback: CallbackQuery):
+    """Show FAQ information"""
+    from app.data import get_info_text
+    from app.keyboards.user_kb import get_back_to_info_keyboard
+
+    await callback.message.edit_text(
+        get_info_text("faq"),
+        parse_mode="HTML",
+        reply_markup=get_back_to_info_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "info_offer")
+async def info_offer_handler(callback: CallbackQuery):
+    """Show public offer (terms of service)"""
+    from app.data import get_info_text
+    from app.keyboards.user_kb import get_back_to_info_keyboard
+
+    await callback.message.edit_text(
+        get_info_text("offer"),
+        parse_mode="HTML",
+        reply_markup=get_back_to_info_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "info_refund")
+async def info_refund_handler(callback: CallbackQuery):
+    """Show refund policy"""
+    from app.data import get_info_text
+    from app.keyboards.user_kb import get_back_to_info_keyboard
+
+    await callback.message.edit_text(
+        get_info_text("refund"),
+        parse_mode="HTML",
+        reply_markup=get_back_to_info_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "info_privacy")
+async def info_privacy_handler(callback: CallbackQuery):
+    """Show privacy policy"""
+    from app.data import get_info_text
+    from app.keyboards.user_kb import get_back_to_info_keyboard
+
+    await callback.message.edit_text(
+        get_info_text("privacy"),
+        parse_mode="HTML",
+        reply_markup=get_back_to_info_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_info")
+async def back_to_info_handler(callback: CallbackQuery):
+    """Go back to info menu"""
+    from app.keyboards.user_kb import get_info_menu
+
+    await callback.message.edit_text(
+        "ℹ️ <b>Информация</b>\n\n"
+        "Выберите интересующий раздел:",
+        parse_mode="HTML",
+        reply_markup=get_info_menu()
+    )
+    await callback.answer()
+
 @router.message(F.text == "📊 Мой баланс")
 async def balance_handler(message: Message, session: AsyncSession):
     balance = await get_user_balance(session, message.from_user.id)

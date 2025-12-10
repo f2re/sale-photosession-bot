@@ -85,10 +85,11 @@ def get_info_menu() -> InlineKeyboardMarkup:
     """Get information menu keyboard"""
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📄 Оферта", callback_data="info_offer")],
+            [InlineKeyboardButton(text="❓ Как это работает", callback_data="info_how_it_works")],
+            [InlineKeyboardButton(text="💡 Частые вопросы (FAQ)", callback_data="info_faq")],
+            [InlineKeyboardButton(text="📄 Публичная оферта", callback_data="info_offer")],
             [InlineKeyboardButton(text="💸 Условия возврата", callback_data="info_refund")],
             [InlineKeyboardButton(text="🔒 Конфиденциальность", callback_data="info_privacy")],
-            [InlineKeyboardButton(text="❓ Как это работает", callback_data="info_how_it_works")],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")]
         ]
     )
@@ -136,6 +137,16 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")]
+        ]
+    )
+    return keyboard
+
+
+def get_back_to_info_keyboard() -> InlineKeyboardMarkup:
+    """Get back to info menu keyboard"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к информации", callback_data="back_to_info")]
         ]
     )
     return keyboard
