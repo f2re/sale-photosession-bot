@@ -415,18 +415,152 @@ async def get_statistics(session: AsyncSession) -> dict:
     users = (await session.execute(select(func.count(User.id)))).scalar()
     processed = (await session.execute(select(func.count(ProcessedImage.id)))).scalar()
     revenue = (await session.execute(select(func.sum(Order.amount)).where(Order.status == "paid"))).scalar() or 0
-    active_orders = (await session.execute(select(func.count(Order.id)).where(Order.status == "pending"))).scalar()
-    open_tickets = (await session.execute(select(func.count(SupportTicket.id)).where(SupportTicket.status.in_(["open", "in_progress"])))).scalar()
-    
+
+    # Active orders = all non-canceled and non-paid orders (pending, waiting_payment, etc)
+    active_orders = (await session.execute(
+        select(func.count(Order.id)).where(
+            Order.status.notin_(["paid", "canceled", "cancelled", "refunded"])
+        )
+    )).scalar()
+
+    # Paid orders count
+    paid_orders = (await session.execute(
+        select(func.count(Order.id)).where(Order.status == "paid")
+    )).scalar()
+
+    # Free vs paid images
+    free_images = (await session.execute(
+        select(func.count(ProcessedImage.id)).where(ProcessedImage.is_free == True)
+    )).scalar() or 0
+
+    paid_images = (await session.execute(
+        select(func.count(ProcessedImage.id)).where(ProcessedImage.is_free == False)
+    )).scalar() or 0
+
+    open_tickets = (await session.execute(
+        select(func.count(SupportTicket.id)).where(
+            SupportTicket.status.in_(["open", "in_progress"])
+        )
+    )).scalar()
+
     return {
         "total_users": users,
         "total_processed": processed,
         "revenue": float(revenue),
         "active_orders": active_orders,
         "open_tickets": open_tickets,
-        "free_images_processed": 0, # Legacy placeholders
-        "paid_images_processed": 0,
-        "paid_orders": 0
+        "free_images_processed": free_images,
+        "paid_images_processed": paid_images,
+        "paid_orders": paid_orders
+    }
+
+
+async def get_user_detailed_stats(session: AsyncSession, telegram_id: int) -> dict:
+    """
+    Get detailed user statistics for profile display
+
+    Returns:
+        dict with user stats including:
+        - photoshoots_used: number of photoshoots completed
+        - images_generated: total images generated
+        - saved_styles: number of saved style presets
+        - top_styles: most used styles
+        - aspect_ratios: usage breakdown by ratio
+        - recent_activity: date of last generation
+    """
+    from sqlalchemy import desc, case
+
+    result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return {
+            "photoshoots_used": 0,
+            "images_generated": 0,
+            "saved_styles": 0,
+            "top_styles": [],
+            "aspect_ratios": {},
+            "recent_activity": None,
+            "total_spent": 0.0
+        }
+
+    # Count total images generated
+    images_generated = user.total_images_processed
+
+    # Calculate photoshoots used (assuming 4 images per photoshoot on average)
+    # More accurate: count unique ProcessedImage creation timestamps within same hour
+    photoshoots_estimate = max(1, images_generated // 4)
+
+    # Count saved style presets
+    saved_styles_count = (await session.execute(
+        select(func.count(StylePreset.id)).where(
+            StylePreset.user_id == user.id,
+            StylePreset.is_active == True
+        )
+    )).scalar() or 0
+
+    # Get top 3 most used styles
+    top_styles_result = await session.execute(
+        select(
+            ProcessedImage.style_name,
+            func.count(ProcessedImage.id).label('count')
+        ).where(
+            ProcessedImage.user_id == user.id,
+            ProcessedImage.style_name.isnot(None)
+        ).group_by(ProcessedImage.style_name)
+        .order_by(desc('count'))
+        .limit(3)
+    )
+    top_styles = [
+        {"name": row.style_name, "count": row.count}
+        for row in top_styles_result.all()
+    ]
+
+    # Get aspect ratio breakdown
+    aspect_ratios_result = await session.execute(
+        select(
+            ProcessedImage.aspect_ratio,
+            func.count(ProcessedImage.id).label('count')
+        ).where(
+            ProcessedImage.user_id == user.id,
+            ProcessedImage.aspect_ratio.isnot(None)
+        ).group_by(ProcessedImage.aspect_ratio)
+        .order_by(desc('count'))
+    )
+    aspect_ratios = {
+        row.aspect_ratio: row.count
+        for row in aspect_ratios_result.all()
+    }
+
+    # Get recent activity (last generated image)
+    recent_activity_result = await session.execute(
+        select(ProcessedImage.created_at)
+        .where(ProcessedImage.user_id == user.id)
+        .order_by(desc(ProcessedImage.created_at))
+        .limit(1)
+    )
+    recent_activity = recent_activity_result.scalar_one_or_none()
+
+    # Calculate total spent
+    total_spent_result = await session.execute(
+        select(func.sum(Order.amount))
+        .where(
+            Order.user_id == user.id,
+            Order.status == "paid"
+        )
+    )
+    total_spent = total_spent_result.scalar() or 0.0
+
+    return {
+        "photoshoots_used": photoshoots_estimate,
+        "images_generated": images_generated,
+        "saved_styles": saved_styles_count,
+        "top_styles": top_styles,
+        "aspect_ratios": aspect_ratios,
+        "recent_activity": recent_activity,
+        "total_spent": float(total_spent)
     }
 
 # ==================== REFERRAL ====================

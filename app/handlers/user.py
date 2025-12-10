@@ -26,7 +26,8 @@ from app.database.crud import (
     update_user_images_count,
     create_processed_image,
     get_user_balance,
-    get_all_packages
+    get_all_packages,
+    get_user_detailed_stats
 )
 from app.utils.message_helpers import safe_edit_text
 from app.config import settings
@@ -250,12 +251,60 @@ async def back_to_info_handler(callback: CallbackQuery):
 
 @router.message(F.text == "📊 Мой баланс")
 async def balance_handler(message: Message, session: AsyncSession):
+    from datetime import datetime
+
+    user = await get_or_create_user(session, message.from_user.id)
     balance = await get_user_balance(session, message.from_user.id)
+    stats = await get_user_detailed_stats(session, message.from_user.id)
+
+    # Build balance message
+    text = f"📊 <b>Ваш баланс и статистика</b>\n\n"
+
+    # Current balance
+    text += f"💎 <b>Доступно фотосессий:</b> <b>{balance['total']}</b>\n"
+    text += f"<i>(1 фотосессия = 4 изображения)</i>\n\n"
+
+    # Usage stats
+    text += f"📈 <b>Ваша статистика:</b>\n"
+    text += f"🎬 Проведено фотосессий: <b>{stats['photoshoots_used']}</b>\n"
+    text += f"🖼️ Сгенерировано изображений: <b>{stats['images_generated']}</b>\n"
+    text += f"🎨 Сохранено стилей: <b>{stats['saved_styles']}</b>\n"
+
+    # Total spent
+    if stats['total_spent'] > 0:
+        text += f"💰 Всего потрачено: <b>{stats['total_spent']:.0f}₽</b>\n"
+
+    # Top styles
+    if stats['top_styles']:
+        text += f"\n🏆 <b>Любимые стили:</b>\n"
+        for i, style in enumerate(stats['top_styles'], 1):
+            text += f"   {i}. {style['name']} ({style['count']}x)\n"
+
+    # Aspect ratios
+    if stats['aspect_ratios']:
+        text += f"\n📐 <b>Используемые пропорции:</b>\n"
+        for ratio, count in list(stats['aspect_ratios'].items())[:3]:
+            text += f"   • {ratio} — {count} фото\n"
+
+    # Recent activity
+    if stats['recent_activity']:
+        days_ago = (datetime.utcnow() - stats['recent_activity']).days
+        if days_ago == 0:
+            activity_text = "сегодня"
+        elif days_ago == 1:
+            activity_text = "вчера"
+        else:
+            activity_text = f"{days_ago} дн. назад"
+        text += f"\n⏱️ Последняя генерация: {activity_text}\n"
+
+    # Call to action
+    if balance['total'] == 0:
+        text += f"\n💎 Купите пакет для продолжения!"
+    else:
+        text += f"\n✅ Готовы творить!"
+
     await message.answer(
-        f"📊 <b>Ваш баланс:</b>\n\n"
-        f"📸 Фотосессий: <b>{balance['total']}</b>\n"
-        f"(1 фотосессия = 4 изображения)\n\n"
-        f"{'💎 Купите пакет для пополнения!' if balance['total'] == 0 else '✅ Можно творить!'}",
+        text,
         parse_mode="HTML",
         reply_markup=get_buy_packages_keyboard() if balance['total'] == 0 else None
     )
@@ -676,23 +725,60 @@ async def buy_package_redirect(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data == "profile")
 async def show_profile(callback: CallbackQuery, session: AsyncSession):
-    """Show user profile"""
+    """Show user profile with detailed statistics"""
     try:
+        from datetime import datetime
+
         user = await get_or_create_user(session, callback.from_user.id)
         balance = await get_user_balance(session, callback.from_user.id)
+        stats = await get_user_detailed_stats(session, callback.from_user.id)
 
-        text = (
-            f"👤 <b>Ваш профиль</b>\n\n"
-            f"ID: <code>{user.telegram_id}</code>\n"
-            f"Имя: {callback.from_user.full_name}\n"
-            f"Username: @{callback.from_user.username or 'не указан'}\n\n"
-            f"📊 <b>Баланс:</b>\n"
-            f"💎 Доступно фотосессий: <b>{balance['total']}</b>\n"
-            f"🆓 Бесплатных: {balance['free']}\n"
-            f"💰 Купленных: {balance['paid']}\n\n"
-            f"📈 <b>Статистика:</b>\n"
-            f"✅ Обработано изображений: {user.total_images_processed}\n"
-        )
+        # Build profile text
+        text = f"👤 <b>Ваш профиль</b>\n\n"
+
+        # User info
+        text += f"🆔 ID: <code>{user.telegram_id}</code>\n"
+        text += f"👤 Имя: {callback.from_user.full_name}\n"
+        if callback.from_user.username:
+            text += f"📱 Username: @{callback.from_user.username}\n"
+        text += f"\n"
+
+        # Balance
+        text += f"💎 <b>Баланс:</b> <b>{balance['total']}</b> фотосессий\n"
+        text += f"<i>(1 фотосессия = 4 изображения)</i>\n\n"
+
+        # Detailed statistics
+        text += f"📈 <b>Статистика:</b>\n"
+        text += f"🎬 Проведено фотосессий: <b>{stats['photoshoots_used']}</b>\n"
+        text += f"🖼️ Сгенерировано изображений: <b>{stats['images_generated']}</b>\n"
+        text += f"🎨 Сохранено стилей: <b>{stats['saved_styles']}</b>\n"
+
+        # Financial stats
+        if stats['total_spent'] > 0:
+            text += f"💰 Всего потрачено: <b>{stats['total_spent']:.0f}₽</b>\n"
+
+        # Top styles
+        if stats['top_styles']:
+            text += f"\n🏆 <b>Топ-стили:</b>\n"
+            for i, style in enumerate(stats['top_styles'], 1):
+                text += f"{i}. {style['name']} — {style['count']} раз\n"
+
+        # Aspect ratios
+        if stats['aspect_ratios']:
+            text += f"\n📐 <b>Пропорции:</b>\n"
+            for ratio, count in list(stats['aspect_ratios'].items())[:3]:
+                text += f"• {ratio}: {count} фото\n"
+
+        # Activity
+        if stats['recent_activity']:
+            days_ago = (datetime.utcnow() - stats['recent_activity']).days
+            if days_ago == 0:
+                activity_text = "сегодня"
+            elif days_ago == 1:
+                activity_text = "вчера"
+            else:
+                activity_text = f"{days_ago} дней назад"
+            text += f"\n⏱️ Последняя активность: {activity_text}"
 
         await safe_edit_text(callback.message, text, parse_mode="HTML")
         await callback.answer()
