@@ -160,13 +160,13 @@ class StyleManager:
         """Rename saved style preset"""
         try:
             logger.info(f"User {telegram_id} | Renaming style preset {preset_id} to '{new_name}'...")
-            
+
             # Get database user id
             user = await get_or_create_user(session, telegram_id=telegram_id)
             database_user_id = user.id
-            
+
             preset = await update_style_preset(session, preset_id, database_user_id, name=new_name)
-            
+
             if preset:
                 logger.info(f"User {telegram_id} | Style preset {preset_id} renamed successfully")
                 return True
@@ -175,4 +175,43 @@ class StyleManager:
                 return False
         except Exception as e:
             logger.error(f"User {telegram_id} | Error renaming style: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    async def update_aspect_ratio(session: AsyncSession, telegram_id: int, preset_id: int, new_aspect_ratio: str) -> bool:
+        """Update aspect ratio for saved style preset"""
+        try:
+            logger.info(f"User {telegram_id} | Updating aspect ratio for style preset {preset_id} to '{new_aspect_ratio}'...")
+
+            # Get database user id
+            user = await get_or_create_user(session, telegram_id=telegram_id)
+            database_user_id = user.id
+
+            # Get current preset
+            preset = await get_style_preset_by_id(session, preset_id, database_user_id)
+
+            if not preset:
+                logger.warning(f"User {telegram_id} | Style preset {preset_id} not found")
+                return False
+
+            # Update aspect_ratio in style_data
+            updated_style_data = preset.style_data.copy()
+            updated_style_data["aspect_ratio"] = new_aspect_ratio
+
+            # Update preset with new style_data
+            updated_preset = await update_style_preset(
+                session,
+                preset_id,
+                database_user_id,
+                style_data=updated_style_data
+            )
+
+            if updated_preset:
+                logger.info(f"User {telegram_id} | Aspect ratio for style preset {preset_id} updated successfully")
+                return True
+            else:
+                logger.warning(f"User {telegram_id} | Failed to update aspect ratio for style preset {preset_id}")
+                return False
+        except Exception as e:
+            logger.error(f"User {telegram_id} | Error updating aspect ratio: {e}", exc_info=True)
             return False
