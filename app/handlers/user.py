@@ -340,7 +340,8 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
 @router.callback_query(F.data.startswith("aspect_ratio:"))
 async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    ratio = callback.data.split(":")[1]
+    # Extract ratio correctly: "aspect_ratio:16:9" -> "16:9"
+    ratio = ":".join(callback.data.split(":")[1:])
     await state.update_data(aspect_ratio=ratio)
     await callback.message.edit_text(
         f"✅ Пропорции: <b>{ratio}</b>\nВыберите метод создания стилей:",

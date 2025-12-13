@@ -73,6 +73,7 @@ class NanoBananaService:
 
             # Convert aspect ratio to format accepted by API (e.g., "1:1" -> "1:1")
             aspect_ratio_param = aspect_ratio if ":" in aspect_ratio else "1:1"
+            logger.info(f"Using aspect_ratio for generation: {aspect_ratio_param} (original: {aspect_ratio})")
 
             # Payload for chat completion with image output
             # Using image_config for Gemini 2.5 Flash as per OpenRouter documentation
