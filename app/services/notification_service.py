@@ -138,8 +138,9 @@ class NotificationService:
         bot: Bot,
         telegram_id: int,
         amount: float,
-        images_used: int,
-        images_total: int
+        order_id: Optional[int] = None,
+        images_used: Optional[int] = None,
+        images_total: Optional[int] = None
     ):
         """
         Notify user about successful refund
@@ -148,16 +149,23 @@ class NotificationService:
             bot: Bot instance
             telegram_id: User's telegram ID
             amount: Refund amount
-            images_used: Number of images used
-            images_total: Total images in package
+            order_id: Order ID (optional)
+            images_used: Number of images used (optional)
+            images_total: Total images in package (optional)
         """
         try:
             text = (
                 "💵 <b>Возврат оформлен</b>\n\n"
                 f"💰 Сумма возврата: {amount:.2f}₽\n"
-                f"📸 Использовано изображений: {images_used}/{images_total}\n\n"
-                "Средства будут возвращены на вашу карту в течение 3-5 рабочих дней."
             )
+
+            if order_id:
+                text += f"📝 Заказ: #{order_id}\n"
+
+            if images_used is not None and images_total is not None:
+                text += f"📸 Использовано изображений: {images_used}/{images_total}\n"
+
+            text += "\nСредства будут возвращены на вашу карту в течение 3-5 рабочих дней."
 
             await bot.send_message(telegram_id, text, parse_mode="HTML")
             logger.info(f"Refund notification sent to user {telegram_id}")

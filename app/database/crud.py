@@ -304,13 +304,13 @@ async def mark_order_paid(session: AsyncSession, invoice_id: str) -> Optional[Or
 
     order.status = "paid"
     order.paid_at = datetime.utcnow()
-    
+
     # Load relations
     await session.refresh(order, ['user', 'package'])
-    
+
     # Add photoshoots to user balance
     order.user.images_remaining += order.package.photoshoots_count
-    
+
     # Referral reward
     if order.user.referred_by_id:
         from app.config import settings
@@ -327,6 +327,92 @@ async def mark_order_paid(session: AsyncSession, invoice_id: str) -> Optional[Or
 
     await session.commit()
     return order
+
+
+async def get_all_orders(session: AsyncSession, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Order]:
+    """Get all orders with optional status filter"""
+    query = select(Order).options(
+        selectinload(Order.user),
+        selectinload(Order.package)
+    ).order_by(Order.created_at.desc())
+
+    if status:
+        query = query.where(Order.status == status)
+
+    query = query.limit(limit).offset(offset)
+    result = await session.execute(query)
+    return result.scalars().all()
+
+
+async def get_order_by_id(session: AsyncSession, order_id: int) -> Optional[Order]:
+    """Get order by ID with related data"""
+    result = await session.execute(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.user),
+            selectinload(Order.package),
+            selectinload(Order.processed_images)
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def cancel_order(session: AsyncSession, order_id: int, admin_id: int) -> Optional[Order]:
+    """Cancel an order (only if not paid)"""
+    order = await get_order_by_id(session, order_id)
+
+    if not order:
+        return None
+
+    if order.status == "paid":
+        return None  # Cannot cancel paid order, use refund instead
+
+    order.status = "cancelled"
+    await session.commit()
+    await session.refresh(order)
+    return order
+
+
+async def refund_order(session: AsyncSession, order_id: int, admin_id: int) -> Optional[Order]:
+    """Refund a paid order and deduct photoshoots from user balance"""
+    order = await get_order_by_id(session, order_id)
+
+    if not order:
+        return None
+
+    if order.status != "paid":
+        return None  # Can only refund paid orders
+
+    # Load user and package
+    await session.refresh(order, ['user', 'package'])
+
+    # Deduct photoshoots from user balance
+    photoshoots_to_deduct = order.package.photoshoots_count
+
+    # Only deduct if user has enough balance, otherwise set to 0
+    if order.user.images_remaining >= photoshoots_to_deduct:
+        order.user.images_remaining -= photoshoots_to_deduct
+    else:
+        order.user.images_remaining = 0
+
+    # Update order status
+    order.status = "refunded"
+
+    await session.commit()
+    await session.refresh(order)
+    return order
+
+
+async def get_orders_count(session: AsyncSession, status: Optional[str] = None) -> int:
+    """Get total count of orders"""
+    query = select(func.count(Order.id))
+
+    if status:
+        query = query.where(Order.status == status)
+
+    result = await session.execute(query)
+    return result.scalar() or 0
 
 
 # ==================== PROCESSED IMAGE ====================
