@@ -10,12 +10,16 @@ from app.database.crud import (
     get_statistics, get_open_tickets, resolve_ticket,
     get_or_create_user, get_user_balance, get_ticket_by_id,
     add_support_message, get_utm_statistics, get_conversion_funnel,
-    get_utm_events_summary, get_utm_sync_status
+    get_utm_events_summary, get_utm_sync_status,
+    get_all_orders, get_order_by_id, cancel_order, refund_order,
+    get_orders_count, mark_order_paid
 )
 from app.services.notification_service import NotificationService
 from app.services.yandex_metrika import metrika_service
 from app.keyboards.admin_kb import (
-    get_admin_menu, get_ticket_actions, get_admin_back, get_admin_cancel, get_admin_utm_menu
+    get_admin_menu, get_ticket_actions, get_admin_back, get_admin_cancel, get_admin_utm_menu,
+    get_orders_filter_menu, get_orders_list_keyboard, get_order_detail_keyboard,
+    get_refund_keyboard, get_refund_confirm_keyboard, get_ticket_list_keyboard
 )
 from app.utils.decorators import admin_only
 from app.utils.message_helpers import safe_edit_text
@@ -27,6 +31,7 @@ class AdminStates(StatesGroup):
     waiting_for_ticket_reply = State()
     waiting_for_user_id = State()
     waiting_for_images_count = State()
+    waiting_for_refund_order_id = State()
 
 
 @router.message(Command("admin"))
@@ -107,7 +112,7 @@ async def admin_stats(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_support")
 @admin_only
 async def admin_support_tickets(callback: CallbackQuery):
-    """Show support tickets"""
+    """Show support tickets with inline actions"""
     db = get_db()
     async with db.get_session() as session:
         tickets = await get_open_tickets(session)
@@ -118,20 +123,63 @@ async def admin_support_tickets(callback: CallbackQuery):
         await callback.answer()
         return
 
-    text = "💬 <b>Обращения в поддержку</b>\n\n"
+    text = (
+        "💬 <b>Обращения в поддержку</b>\n\n"
+        f"Всего открытых: {len(tickets)}\n\n"
+        "Выберите обращение для просмотра:"
+    )
 
-    for ticket in tickets[:10]:  # Show first 10
-        text += (
-            f"📝 #{ticket.id} | {ticket.status}\n"
-            f"👤 User ID: {ticket.user.telegram_id}\n"
-            f"💬 {ticket.message[:100]}...\n"
-            f"🕐 {ticket.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_ticket_list_keyboard(tickets, page=0))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_support_page:"))
+@admin_only
+async def admin_support_page(callback: CallbackQuery):
+    """Navigate support tickets pages"""
+    page = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        tickets = await get_open_tickets(session)
+
+    text = (
+        "💬 <b>Обращения в поддержку</b>\n\n"
+        f"Всего открытых: {len(tickets)}\n\n"
+        "Выберите обращение для просмотра:"
+    )
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_ticket_list_keyboard(tickets, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_ticket_detail:"))
+@admin_only
+async def admin_ticket_detail(callback: CallbackQuery):
+    """View ticket detail"""
+    ticket_id = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        ticket = await get_ticket_by_id(session, ticket_id)
+
+        if not ticket:
+            await callback.answer("❌ Обращение не найдено", show_alert=True)
+            return
+
+        text = (
+            f"📝 <b>Обращение #{ticket.id}</b>\n\n"
+            f"👤 От: @{ticket.user.username or 'Unknown'} ({ticket.user.telegram_id})\n"
+            f"📅 Создано: {ticket.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            f"📊 Статус: {ticket.status}\n\n"
+            f"💬 <b>Сообщение:</b>\n{ticket.message}"
         )
 
-    text += "\nИспользуйте /ticket <ID> для ответа"
+        if ticket.admin_response:
+            text += f"\n\n✅ <b>Ваш ответ:</b>\n{ticket.admin_response}"
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_back())
-    await callback.answer()
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_ticket_actions(ticket.id))
+        await callback.answer()
 
 
 @router.message(Command("ticket"))
@@ -317,6 +365,314 @@ async def admin_close_ticket(callback: CallbackQuery):
         reply_markup=get_admin_back()
     )
     await callback.answer()
+
+
+# ==================== ORDERS MANAGEMENT ====================
+
+@router.callback_query(F.data == "admin_orders")
+@admin_only
+async def admin_orders_menu(callback: CallbackQuery):
+    """Show orders filter menu"""
+    text = (
+        "📦 <b>Управление заказами</b>\n\n"
+        "Выберите фильтр для просмотра заказов:"
+    )
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_orders_filter_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_orders_filter:"))
+@admin_only
+async def admin_orders_filter(callback: CallbackQuery):
+    """Show filtered orders list"""
+    status_filter = callback.data.split(":")[1]
+
+    db = get_db()
+    async with db.get_session() as session:
+        if status_filter == "all":
+            orders = await get_all_orders(session, status=None, limit=100)
+            filter_name = "Все заказы"
+        else:
+            orders = await get_all_orders(session, status=status_filter, limit=100)
+            filter_name = {
+                "paid": "Оплаченные",
+                "pending": "Ожидают оплаты",
+                "cancelled": "Отмененные",
+                "refunded": "Возвращенные"
+            }.get(status_filter, "Заказы")
+
+    if not orders:
+        text = f"📦 <b>{filter_name}</b>\n\n❌ Заказов не найдено"
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_back())
+        await callback.answer()
+        return
+
+    text = (
+        f"📦 <b>{filter_name}</b>\n\n"
+        f"Всего: {len(orders)}\n\n"
+        "Выберите заказ для просмотра:"
+    )
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_orders_list_keyboard(orders, page=0, status_filter=status_filter)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_orders_page:"))
+@admin_only
+async def admin_orders_page(callback: CallbackQuery):
+    """Navigate orders pages"""
+    parts = callback.data.split(":")
+    status_filter = parts[1]
+    page = int(parts[2])
+
+    db = get_db()
+    async with db.get_session() as session:
+        if status_filter == "all":
+            orders = await get_all_orders(session, status=None, limit=100)
+            filter_name = "Все заказы"
+        else:
+            orders = await get_all_orders(session, status=status_filter, limit=100)
+            filter_name = {
+                "paid": "Оплаченные",
+                "pending": "Ожидают оплаты",
+                "cancelled": "Отмененные",
+                "refunded": "Возвращенные"
+            }.get(status_filter, "Заказы")
+
+    text = (
+        f"📦 <b>{filter_name}</b>\n\n"
+        f"Всего: {len(orders)}\n\n"
+        "Выберите заказ для просмотра:"
+    )
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_orders_list_keyboard(orders, page=page, status_filter=status_filter)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_order_detail:"))
+@admin_only
+async def admin_order_detail(callback: CallbackQuery):
+    """Show order details"""
+    order_id = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        order = await get_order_by_id(session, order_id)
+
+        if not order:
+            await callback.answer("❌ Заказ не найден", show_alert=True)
+            return
+
+        status_emoji = {
+            "pending": "⏳",
+            "paid": "✅",
+            "cancelled": "❌",
+            "refunded": "💸"
+        }.get(order.status, "❓")
+
+        text = (
+            f"📦 <b>Заказ #{order.id}</b>\n\n"
+            f"📊 Статус: {status_emoji} {order.status}\n"
+            f"👤 Пользователь: {order.user.telegram_id}\n"
+            f"   @{order.user.username or 'Unknown'}\n\n"
+            f"📦 Пакет: {order.package.name}\n"
+            f"   Фотосессий: {order.package.photoshoots_count}\n"
+            f"💰 Сумма: {order.amount}₽\n\n"
+            f"📅 Создан: {order.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+        )
+
+        if order.paid_at:
+            text += f"✅ Оплачен: {order.paid_at.strftime('%d.%m.%Y %H:%M')}\n"
+
+        if order.invoice_id:
+            text += f"\n🔑 Invoice ID: <code>{order.invoice_id}</code>"
+
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_order_detail_keyboard(order.id, order.status)
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_confirm_order:"))
+@admin_only
+async def admin_confirm_order(callback: CallbackQuery):
+    """Manually confirm order payment"""
+    order_id = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        order = await get_order_by_id(session, order_id)
+
+        if not order:
+            await callback.answer("❌ Заказ не найден", show_alert=True)
+            return
+
+        if order.status == "paid":
+            await callback.answer("✅ Заказ уже оплачен", show_alert=True)
+            return
+
+        # Mark as paid using invoice_id
+        await mark_order_paid(session, order.invoice_id)
+
+    await callback.answer("✅ Заказ помечен как оплаченный")
+    # Refresh order view
+    await admin_order_detail(callback)
+
+
+@router.callback_query(F.data.startswith("admin_cancel_order:"))
+@admin_only
+async def admin_cancel_order_handler(callback: CallbackQuery):
+    """Cancel an order"""
+    order_id = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        order = await cancel_order(session, order_id, callback.from_user.id)
+
+        if not order:
+            await callback.answer("❌ Не удалось отменить заказ. Возможно, он уже оплачен.", show_alert=True)
+            return
+
+    await callback.answer("✅ Заказ отменен")
+    # Refresh order view
+    await admin_order_detail(callback)
+
+
+# ==================== REFUND MANAGEMENT ====================
+
+@router.callback_query(F.data == "admin_refund")
+@admin_only
+async def admin_refund_menu(callback: CallbackQuery):
+    """Show refund menu"""
+    text = (
+        "💸 <b>Оформление возврата</b>\n\n"
+        "Выберите оплаченный заказ для возврата средств.\n\n"
+        "⚠️ При возврате:\n"
+        "• Статус заказа изменится на 'refunded'\n"
+        "• Фотосессии будут вычтены из баланса пользователя\n"
+        "• Необходимо вернуть деньги пользователю вручную через платежную систему"
+    )
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_refund_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_refund_select")
+@admin_only
+async def admin_refund_select(callback: CallbackQuery):
+    """Show paid orders for refund selection"""
+    db = get_db()
+    async with db.get_session() as session:
+        paid_orders = await get_all_orders(session, status="paid", limit=100)
+
+    if not paid_orders:
+        text = "💸 <b>Оформление возврата</b>\n\n❌ Нет оплаченных заказов для возврата"
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_back())
+        await callback.answer()
+        return
+
+    text = (
+        "💸 <b>Выберите заказ для возврата</b>\n\n"
+        f"Всего оплаченных заказов: {len(paid_orders)}\n\n"
+        "Выберите заказ:"
+    )
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_orders_list_keyboard(paid_orders, page=0, status_filter="paid")
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_refund_confirm:"))
+@admin_only
+async def admin_refund_confirm(callback: CallbackQuery):
+    """Confirm refund action"""
+    order_id = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        order = await get_order_by_id(session, order_id)
+
+        if not order:
+            await callback.answer("❌ Заказ не найден", show_alert=True)
+            return
+
+        if order.status != "paid":
+            await callback.answer("❌ Можно вернуть только оплаченные заказы", show_alert=True)
+            return
+
+        text = (
+            f"💸 <b>Подтверждение возврата</b>\n\n"
+            f"📦 Заказ: #{order.id}\n"
+            f"👤 Пользователь: {order.user.telegram_id} (@{order.user.username or 'Unknown'})\n"
+            f"💰 Сумма: {order.amount}₽\n"
+            f"📦 Фотосессий: {order.package.photoshoots_count}\n\n"
+            f"⚠️ <b>ВНИМАНИЕ:</b>\n"
+            f"• Будет вычтано {order.package.photoshoots_count} фотосессий из баланса пользователя\n"
+            f"• Текущий баланс: {order.user.images_remaining} фотосессий\n"
+            f"• После возврата: {max(0, order.user.images_remaining - order.package.photoshoots_count)} фотосессий\n\n"
+            f"❗️ Не забудьте вернуть {order.amount}₽ через платежную систему!"
+        )
+
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_refund_confirm_keyboard(order.id)
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_refund_process:"))
+@admin_only
+async def admin_refund_process(callback: CallbackQuery):
+    """Process refund"""
+    order_id = int(callback.data.split(":")[1])
+
+    db = get_db()
+    async with db.get_session() as session:
+        order = await refund_order(session, order_id, callback.from_user.id)
+
+        if not order:
+            await callback.answer("❌ Не удалось оформить возврат. Проверьте статус заказа.", show_alert=True)
+            return
+
+        # Refresh order data
+        await session.refresh(order, ['user', 'package'])
+
+        text = (
+            f"✅ <b>Возврат оформлен!</b>\n\n"
+            f"📦 Заказ #{order.id} помечен как возвращенный\n"
+            f"👤 Пользователь: {order.user.telegram_id}\n"
+            f"💰 Сумма: {order.amount}₽\n"
+            f"📦 Вычтено фотосессий: {order.package.photoshoots_count}\n"
+            f"💳 Текущий баланс пользователя: {order.user.images_remaining}\n\n"
+            f"❗️ <b>Важно:</b> Верните {order.amount}₽ пользователю через платежную систему!"
+        )
+
+        # Notify user
+        try:
+            await NotificationService.notify_user_refund(
+                bot=callback.bot,
+                telegram_id=order.user.telegram_id,
+                order_id=order.id,
+                amount=float(order.amount)
+            )
+        except Exception as e:
+            text += f"\n\n⚠️ Не удалось отправить уведомление пользователю"
+
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_back())
+        await callback.answer("✅ Возврат оформлен")
 
 
 @router.callback_query(F.data == "admin_add_images")
