@@ -162,7 +162,7 @@ Your description:"""
         progress_message=None
     ) -> Dict:
         try:
-            logger.info(f"Starting photoshoot for user {user.telegram_id}")
+            logger.info(f"Starting photoshoot for user {user.telegram_id} with aspect_ratio: {aspect_ratio}, styles: {len(styles)}")
 
             # Convert if needed
             try:
