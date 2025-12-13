@@ -36,9 +36,12 @@ class PhotoshootStates(StatesGroup):
 
 class StyleManagementStates(StatesGroup):
     """States for style management"""
-    
+
     # Viewing saved styles list
     viewing_saved_styles = State()
-    
+
     # Editing style name
     editing_style_name = State()
+
+    # Editing aspect ratio
+    editing_aspect_ratio = State()

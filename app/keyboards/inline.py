@@ -96,9 +96,10 @@ def get_style_management_keyboard(preset_id: int) -> InlineKeyboardMarkup:
     """Keyboard for managing a specific style preset"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Переименовать", callback_data=f"rename_style:{preset_id}")
+    builder.button(text="📐 Изменить пропорции", callback_data=f"change_aspect_ratio:{preset_id}")
     builder.button(text="🗑 Удалить", callback_data=f"delete_style:{preset_id}")
     builder.button(text="🔙 Назад к списку", callback_data="manage_styles")
-    builder.adjust(2, 1)
+    builder.adjust(2, 1, 1)
     return builder.as_markup()
 
 def get_post_generation_keyboard(has_balance: bool) -> InlineKeyboardMarkup:
