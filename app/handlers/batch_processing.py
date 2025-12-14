@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -17,6 +18,7 @@ from app.database.crud import (
     update_user_stats, save_processed_image, get_or_create_user
 )
 from app.services.image_processor import ImageProcessor
+from app.states import PhotoshootStates
 from app.services.yandex_metrika import metrika_service
 from app.keyboards.user_kb import get_support_contact_keyboard, get_buy_package_keyboard
 from app.utils.decorators import error_handler
@@ -196,8 +198,8 @@ async def process_media_group_after_timeout(media_group_id: str, user_id: int, b
     )
 
 
-@router.message(F.photo & F.media_group_id)
-@router.message(F.document & F.media_group_id)
+@router.message(F.photo & F.media_group_id, ~StateFilter(PhotoshootStates.batch_style_collecting_photos))
+@router.message(F.document & F.media_group_id, ~StateFilter(PhotoshootStates.batch_style_collecting_photos))
 @error_handler
 async def collect_media_group_handler(message: Message):
     """Collect images from media group (album)"""
