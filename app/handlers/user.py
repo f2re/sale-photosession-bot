@@ -1355,4 +1355,16 @@ async def batch_style_process_photos(message: Message, state: FSMContext, sessio
     else:
         await message.answer(final_text, parse_mode="HTML", reply_markup=get_post_generation_keyboard(True))
 
-    await state.clear()
+    # Keep styles data for saving, but clear batch-specific data
+    await state.update_data(
+        styles=batch_styles,
+        aspect_ratio=batch_aspect_ratio,
+        product_name=data.get("batch_product_name", "Товар"),
+        # Clear batch-specific data
+        batch_photos=None,
+        batch_styles=None,
+        batch_aspect_ratio=None,
+        batch_product_name=None,
+        batch_mode_create=None
+    )
+    await state.set_state(None)  # Clear state but keep data
