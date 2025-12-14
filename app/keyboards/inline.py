@@ -38,7 +38,7 @@ def get_style_selection_keyboard() -> InlineKeyboardMarkup:
 def get_style_preview_keyboard(can_save: bool = True, product_name: str = None) -> InlineKeyboardMarkup:
     """Keyboard for style preview with option to edit product name"""
     builder = InlineKeyboardBuilder()
-    
+
     # Add edit product name button if product name is provided
     if product_name:
         short_name = product_name[:25] + "..." if len(product_name) > 25 else product_name
@@ -46,13 +46,14 @@ def get_style_preview_keyboard(can_save: bool = True, product_name: str = None) 
             text=f"✏️ Изменить: {short_name}",
             callback_data="edit_product_name"
         )
-    
+
     builder.button(text="✅ Создать фотосессию", callback_data="confirm_generation")
+    builder.button(text="📦 Пакетная обработка", callback_data="batch_style_start")
     builder.button(text="🔄 Другие случайные стили", callback_data="styles:random")
-    
+
     if can_save:
         builder.button(text="💾 Сохранить этот стиль", callback_data="save_style")
-    
+
     builder.button(text="🔙 Назад к выбору", callback_data="back_to_style_selection")
     builder.adjust(1)
     return builder.as_markup()

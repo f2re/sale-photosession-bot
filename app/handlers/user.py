@@ -800,3 +800,367 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_main_menu()
     )
     await callback.answer()
+
+
+# ==================== BATCH STYLE PROCESSING ====================
+
+@router.callback_query(F.data == "batch_style_start")
+async def batch_style_start(callback: CallbackQuery, state: FSMContext):
+    """Start batch style processing flow"""
+    await callback.answer()
+
+    data = await state.get_data()
+    styles = data.get("styles", [])
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+    product_name = data.get("product_name", "Товар")
+
+    if not styles:
+        await callback.message.edit_text(
+            "❌ Стили не найдены. Пожалуйста, начните сначала.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Store current photo for the batch
+    product_image_bytes = data.get("product_image_bytes")
+
+    # Initialize batch processing data
+    await state.update_data(
+        batch_photos=[product_image_bytes] if product_image_bytes else [],
+        batch_styles=styles,
+        batch_aspect_ratio=aspect_ratio,
+        batch_product_name=product_name
+    )
+    await state.set_state(PhotoshootStates.batch_style_collecting_photos)
+
+    text = (
+        "📦 <b>Пакетная обработка со стилями</b>\n\n"
+        f"🎨 Стили подготовлены: <b>{len(styles)}</b>\n"
+        f"📐 Пропорции: <b>{aspect_ratio}</b>\n\n"
+        "📸 <b>Отправьте фотографии товаров</b>\n\n"
+        "Вы можете отправить:\n"
+        "• Одно фото за раз\n"
+        "• Несколько фото по очереди\n"
+        "• Альбом (до 10 фото)\n\n"
+        "Когда загрузите все фото, нажмите \"✅ Готово\""
+    )
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Готово, начать генерацию", callback_data="batch_style_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="batch_style_cancel")]
+    ])
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.message(PhotoshootStates.batch_style_collecting_photos, F.photo)
+async def batch_collect_photo(message: Message, state: FSMContext):
+    """Collect photos for batch processing"""
+    try:
+        # Download photo
+        photo = message.photo[-1]
+        file = await message.bot.get_file(photo.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        image_bytes = file_bytes.read()
+
+        # Add to batch
+        data = await state.get_data()
+        batch_photos = data.get("batch_photos", [])
+        batch_photos.append(image_bytes)
+        await state.update_data(batch_photos=batch_photos)
+
+        # Send confirmation
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Готово, начать генерацию", callback_data="batch_style_confirm")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="batch_style_cancel")]
+        ])
+
+        await message.answer(
+            f"✅ Фото добавлено!\n\n"
+            f"📸 Всего фото: <b>{len(batch_photos)}</b>\n\n"
+            f"Отправьте еще фото или нажмите \"✅ Готово\"",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        logger.error(f"Error collecting photo: {e}", exc_info=True)
+        await message.answer("❌ Ошибка загрузки фото. Попробуйте еще раз.")
+
+
+@router.callback_query(F.data == "batch_style_confirm")
+async def batch_style_confirm(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Confirm and show batch processing summary"""
+    await callback.answer()
+
+    data = await state.get_data()
+    batch_photos = data.get("batch_photos", [])
+    batch_styles = data.get("batch_styles", [])
+    batch_aspect_ratio = data.get("batch_aspect_ratio", "1:1")
+
+    if not batch_photos:
+        await callback.message.edit_text(
+            "❌ Нет загруженных фото. Отправьте хотя бы одно фото.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Get user balance
+    user = await get_or_create_user(session, callback.from_user.id)
+    available_balance = user.images_remaining
+
+    # Calculate required generations
+    photos_count = len(batch_photos)
+    required_generations = photos_count  # 1 generation per photo
+
+    # Build confirmation message
+    text = (
+        f"📦 <b>Подтверждение пакетной обработки</b>\n\n"
+        f"📸 Фотографий: <b>{photos_count}</b>\n"
+        f"🎨 Стилей на каждое фото: <b>{len(batch_styles)}</b>\n"
+        f"📐 Пропорции: <b>{batch_aspect_ratio}</b>\n\n"
+        f"💎 Требуется генераций: <b>{required_generations}</b>\n"
+        f"💳 Ваш баланс: <b>{available_balance}</b>\n\n"
+    )
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    if available_balance >= required_generations:
+        # Enough balance
+        text += (
+            f"✅ <b>Хватает на все фотосессии!</b>\n\n"
+            f"После обработки останется: <b>{available_balance - required_generations}</b>\n\n"
+            f"Начать генерацию?"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Начать генерацию", callback_data="batch_style_process")],
+            [InlineKeyboardButton(text="◀️ Добавить еще фото", callback_data="batch_style_add_more")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="batch_style_cancel")]
+        ])
+    elif available_balance > 0:
+        # Partial balance
+        text += (
+            f"⚠️ <b>Недостаточно генераций!</b>\n\n"
+            f"Можно обработать только первые <b>{available_balance}</b> фото.\n\n"
+            f"Выберите действие:"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"✅ Обработать {available_balance} фото", callback_data="batch_style_process_partial")],
+            [InlineKeyboardButton(text="💎 Купить пакет", callback_data="show_packages")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="batch_style_cancel")]
+        ])
+    else:
+        # No balance
+        text += (
+            f"❌ <b>Недостаточно генераций!</b>\n\n"
+            f"У вас 0 доступных обработок.\n"
+            f"Купите пакет для продолжения."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💎 Купить пакет", callback_data="show_packages")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="batch_style_cancel")]
+        ])
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "batch_style_add_more")
+async def batch_style_add_more(callback: CallbackQuery, state: FSMContext):
+    """Return to photo collection state"""
+    await callback.answer()
+    await state.set_state(PhotoshootStates.batch_style_collecting_photos)
+
+    data = await state.get_data()
+    batch_photos = data.get("batch_photos", [])
+
+    text = (
+        f"📸 <b>Продолжаем сбор фото</b>\n\n"
+        f"Сейчас загружено: <b>{len(batch_photos)}</b> фото\n\n"
+        f"Отправьте еще фото или нажмите \"✅ Готово\""
+    )
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Готово, начать генерацию", callback_data="batch_style_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="batch_style_cancel")]
+    ])
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "batch_style_process")
+async def batch_style_process_all(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Process all photos with batch styles"""
+    await callback.answer()
+    await batch_style_process_photos(callback.message, state, session, bot, process_all=True)
+
+
+@router.callback_query(F.data == "batch_style_process_partial")
+async def batch_style_process_some(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Process only available photos with batch styles"""
+    await callback.answer()
+    await batch_style_process_photos(callback.message, state, session, bot, process_all=False)
+
+
+@router.callback_query(F.data == "batch_style_cancel")
+async def batch_style_cancel_handler(callback: CallbackQuery, state: FSMContext):
+    """Cancel batch style processing"""
+    await callback.answer("Пакетная обработка отменена")
+    await state.clear()
+    await callback.message.edit_text(
+        "❌ <b>Пакетная обработка отменена</b>\n\n"
+        "Используйте меню для создания новой фотосессии.",
+        parse_mode="HTML"
+    )
+
+
+async def batch_style_process_photos(message: Message, state: FSMContext, session: AsyncSession, bot: Bot, process_all: bool):
+    """Process batch of photos with styles"""
+    data = await state.get_data()
+    batch_photos = data.get("batch_photos", [])
+    batch_styles = data.get("batch_styles", [])
+    batch_aspect_ratio = data.get("batch_aspect_ratio", "1:1")
+
+    if not batch_photos or not batch_styles:
+        await message.edit_text("❌ Ошибка: нет данных для обработки", parse_mode="HTML")
+        await state.clear()
+        return
+
+    # Get user
+    user = await get_or_create_user(session, message.chat.id)
+
+    # Determine how many photos to process
+    if process_all:
+        photos_to_process = batch_photos
+    else:
+        # Limit to available balance
+        available = user.images_remaining
+        photos_to_process = batch_photos[:available]
+
+    total_photos = len(photos_to_process)
+
+    # Start processing
+    await message.edit_text(
+        f"🔄 <b>Начинаю пакетную генерацию...</b>\n\n"
+        f"📸 Обрабатываю {total_photos} фото\n"
+        f"🎨 {len(batch_styles)} стилей на каждое\n\n"
+        f"⏳ Пожалуйста, подождите...",
+        parse_mode="HTML"
+    )
+
+    processed_count = 0
+    failed_count = 0
+
+    for idx, photo_bytes in enumerate(photos_to_process, 1):
+        try:
+            # Check balance before processing
+            await session.refresh(user)
+            if user.images_remaining < 1:
+                await message.answer(
+                    f"⚠️ <b>Баланс закончился!</b>\n\n"
+                    f"✅ Обработано: {processed_count}/{total_photos}\n"
+                    f"❌ Пропущено: {total_photos - processed_count}\n\n"
+                    f"💎 Купите пакет для продолжения.",
+                    parse_mode="HTML",
+                    reply_markup=get_buy_packages_keyboard()
+                )
+                break
+
+            # Generate photoshoot for this photo
+            msg_status = await message.answer(
+                f"🎨 Генерирую фото {idx}/{total_photos}...\n⏳ ~1 мин",
+                parse_mode="HTML"
+            )
+
+            res = await image_processor.generate_photoshoot(
+                photo_bytes, batch_styles, batch_aspect_ratio, bot, user, msg_status
+            )
+
+            if not res["success"]:
+                await msg_status.edit_text(f"❌ Ошибка генерации фото {idx}: {res.get('error', 'Неизвестная ошибка')}")
+                failed_count += 1
+                await asyncio.sleep(2)
+                continue
+
+            # Deduct balance
+            user.images_remaining -= 1
+            await session.commit()
+
+            # Send results
+            media = []
+            successful_count = 0
+            style_names = []
+
+            for i, img in enumerate(res["images"]):
+                if img.get("success"):
+                    try:
+                        input_file = BufferedInputFile(
+                            img["image_bytes"],
+                            filename=f"batch_{idx}_{i}_{img['style_name']}.png"
+                        )
+                        media.append(InputMediaPhoto(media=input_file))
+                        await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], batch_aspect_ratio)
+                        style_names.append(img['style_name'])
+                        successful_count += 1
+                    except Exception as e:
+                        logger.error(f"Error preparing image {i}: {e}", exc_info=True)
+
+            await msg_status.delete()
+
+            if media:
+                await message.answer_media_group(media)
+
+                remaining = total_photos - idx
+                summary = (
+                    f"✅ <b>Фото {idx}/{total_photos} готово!</b>\n\n"
+                    f"📊 Успешно: {successful_count}/{len(batch_styles)}\n"
+                    f"💎 Баланс: {user.images_remaining}\n"
+                )
+
+                if remaining > 0:
+                    summary += f"\n⏳ Осталось обработать: <b>{remaining}</b> фото"
+
+                if style_names:
+                    summary += f"\n\n🎨 Стили:\n"
+                    for s_idx, style in enumerate(style_names, 1):
+                        summary += f"{s_idx}. {style}\n"
+
+                await message.answer(summary, parse_mode="HTML")
+
+                processed_count += 1
+
+                # Delay between photos
+                if idx < total_photos:
+                    await asyncio.sleep(3)
+            else:
+                await message.answer(f"❌ Не удалось сгенерировать фото {idx}/{total_photos}")
+                failed_count += 1
+
+        except Exception as e:
+            logger.error(f"Error processing photo {idx}/{total_photos}: {e}", exc_info=True)
+            failed_count += 1
+            await asyncio.sleep(2)
+
+    # Final summary
+    await session.refresh(user)
+    final_text = (
+        f"🎉 <b>Пакетная обработка завершена!</b>\n\n"
+        f"✅ Успешно обработано: <b>{processed_count}</b> фото\n"
+    )
+
+    if failed_count > 0:
+        final_text += f"❌ Ошибок: <b>{failed_count}</b>\n"
+
+    final_text += f"\n💎 Остаток баланса: <b>{user.images_remaining}</b>"
+
+    if user.images_remaining == 0:
+        final_text += "\n\n⚠️ Баланс закончился! Купите пакет для продолжения."
+        await message.answer(final_text, parse_mode="HTML", reply_markup=get_buy_packages_keyboard())
+    elif user.images_remaining <= 3:
+        final_text += "\n\n💡 Рекомендуем пополнить баланс!"
+        await message.answer(final_text, parse_mode="HTML", reply_markup=get_post_generation_keyboard(user.images_remaining > 0))
+    else:
+        await message.answer(final_text, parse_mode="HTML", reply_markup=get_post_generation_keyboard(True))
+
+    await state.clear()
