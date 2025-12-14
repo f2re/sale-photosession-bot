@@ -34,6 +34,11 @@ class PhotoshootStates(StatesGroup):
     # Saving a style preset name
     saving_style_name = State()
 
+    # Batch style processing states
+    batch_style_collecting_photos = State()
+    batch_style_confirming = State()
+    batch_style_processing = State()
+
 class StyleManagementStates(StatesGroup):
     """States for style management"""
 
