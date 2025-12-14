@@ -8,6 +8,7 @@ import json
 import re
 from typing import Dict, List, Optional
 from app.config import settings
+from app.services.product_detector import ProductDetector
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,7 @@ Be maximally creative! Use different:
         self.api_key = settings.OPENROUTER_API_KEY
         self.model = settings.PROMPT_MODEL
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
+        self.product_detector = ProductDetector()
 
     def _extract_json_from_response(self, content: str) -> str:
         """
@@ -545,6 +547,81 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
         except Exception as e:
             logger.error(f"Error generating styles: {e}", exc_info=True)
             return self._fallback_response(product_description, aspect_ratio)
+
+    async def generate_styles_with_vision(
+        self,
+        product_image_bytes: bytes,
+        aspect_ratio: str = "1:1",
+        random: bool = False,
+        num_styles: int = 4
+    ) -> Dict:
+        """
+        Analyze product image using vision AI, then generate styles
+
+        Args:
+            product_image_bytes: Product image bytes
+            aspect_ratio: Aspect ratio (1:1, 3:4, etc.)
+            random: If True, generates random creative styles
+            num_styles: Number of styles to generate (1-4)
+
+        Returns:
+            {
+                "success": bool,
+                "product_name": str,
+                "product_type": str,  # Detected product type
+                "description": str,   # Detected product description
+                "styles": [
+                    {"style_name": "...", "prompt": "..."},
+                    ...
+                ],
+                "error": Optional[str]
+            }
+        """
+        try:
+            logger.info("Starting vision-based style generation...")
+
+            # Step 1: Detect product from image
+            detection_result = await self.product_detector.detect_product(product_image_bytes)
+
+            if not detection_result["success"]:
+                logger.warning(f"Product detection failed: {detection_result['error']}")
+                # Fall back to generic description
+                product_description = "A high-end commercial product"
+                product_name = "Premium Product"
+            else:
+                # Use detected product information
+                product_type = detection_result["product_type"]
+                product_name = detection_result["product_name"]
+                description = detection_result["description"]
+                category = detection_result["category"]
+
+                logger.info(f"Product detected: {product_type} - {product_name} ({category})")
+
+                # Create rich product description for style generation
+                product_description = f"{product_name}. {description}"
+
+            # Step 2: Generate styles based on detected product
+            styles_result = await self.generate_styles_from_description(
+                product_description=product_description,
+                aspect_ratio=aspect_ratio,
+                random=random,
+                num_styles=num_styles
+            )
+
+            # Enhance result with detection info
+            if styles_result["success"] and detection_result["success"]:
+                styles_result["product_type"] = detection_result["product_type"]
+                styles_result["description"] = detection_result["description"]
+                styles_result["category"] = detection_result["category"]
+                # Override generic product name with detected name
+                styles_result["product_name"] = product_name
+
+            return styles_result
+
+        except Exception as e:
+            logger.error(f"Error in vision-based style generation: {e}", exc_info=True)
+            # Fallback to generic generation
+            return self._fallback_response("Premium Product", aspect_ratio)
 
     def _validate_response(self, data: dict, expected_count: int = 4) -> bool:
         """Validate JSON structure
