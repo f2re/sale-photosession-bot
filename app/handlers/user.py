@@ -916,11 +916,11 @@ async def batch_use_saved_style(callback: CallbackQuery, state: FSMContext, sess
 
     for style in saved_styles:
         style_name = style.get("name", "Без названия")
-        style_count = len(style.get("styles", []))
+        product_name = style.get("product_name", "Товар")
         aspect_ratio = style.get("aspect_ratio", "1:1")
 
         builder.button(
-            text=f"🎨 {style_name} ({style_count} стилей, {aspect_ratio})",
+            text=f"🎨 {style_name} | {product_name} ({aspect_ratio})",
             callback_data=f"batch_select_saved:{style.get('id')}"
         )
 
@@ -944,8 +944,8 @@ async def batch_select_saved_style(callback: CallbackQuery, state: FSMContext, s
     # Extract preset ID
     preset_id = int(callback.data.split(":")[1])
 
-    # Load the preset
-    preset = await StyleManager.get_style_by_id(session, preset_id, callback.from_user.id)
+    # Load the preset using apply_style
+    preset = await StyleManager.apply_style(session, callback.from_user.id, preset_id)
 
     if not preset:
         await callback.message.edit_text(
@@ -959,7 +959,7 @@ async def batch_select_saved_style(callback: CallbackQuery, state: FSMContext, s
         batch_photos=[],
         batch_styles=preset.get("styles", []),
         batch_aspect_ratio=preset.get("aspect_ratio", "1:1"),
-        batch_product_name=preset.get("name", "Товар")
+        batch_product_name=preset.get("product_name", "Товар")
     )
 
     await state.set_state(PhotoshootStates.batch_style_collecting_photos)
@@ -972,7 +972,7 @@ async def batch_select_saved_style(callback: CallbackQuery, state: FSMContext, s
 
     await callback.message.edit_text(
         f"📦 <b>Пакетная обработка</b>\n\n"
-        f"🎨 Стиль: <b>{preset.get('name', 'Товар')}</b>\n"
+        f"🎨 Стиль: <b>{preset.get('product_name', 'Товар')}</b>\n"
         f"📐 Пропорции: {preset.get('aspect_ratio', '1:1')}\n\n"
         f"📸 Отправьте фото товаров для обработки.\n"
         f"Когда закончите — нажмите <b>Готово</b>.",
