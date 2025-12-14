@@ -352,20 +352,36 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "styles:analyze")
 async def analyze_styles(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    msg = await callback.message.edit_text("🔍 Анализирую товар...")
+    msg = await callback.message.edit_text("🔍 Анализирую товар с помощью AI...")
     data = await state.get_data()
-    
-    res = await prompt_generator.generate_styles_from_description("product image", data["aspect_ratio"])
-    
+
+    # Get product image bytes from state
+    product_image_bytes = data.get("product_image_bytes")
+    if not product_image_bytes:
+        await msg.edit_text("❌ Изображение товара не найдено.", reply_markup=get_style_selection_keyboard())
+        return
+
+    # Use vision-based product detection and style generation
+    res = await prompt_generator.generate_styles_with_vision(
+        product_image_bytes=product_image_bytes,
+        aspect_ratio=data["aspect_ratio"],
+        random=False
+    )
+
     if not res["success"]:
         await msg.edit_text("❌ Ошибка генерации стилей.", reply_markup=get_style_selection_keyboard())
         return
-        
+
     await state.update_data(product_name=res["product_name"], styles=res["styles"])
+
+    # Show detected product info if available
+    product_info = f"📦 {res['product_name']}"
+    if "product_type" in res:
+        product_info = f"📦 {res['product_name']} ({res['product_type']})"
 
     text = _format_styles_preview(res["styles"])
     await msg.edit_text(
-        f"✨ <b>Предложенные стили:</b>\n📦 {res['product_name']}\n\n{text}",
+        f"✨ <b>Предложенные стили:</b>\n{product_info}\n\n{text}",
         reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
@@ -373,19 +389,36 @@ async def analyze_styles(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "styles:random")
 async def random_styles(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    msg = await callback.message.edit_text("🎲 Генерирую случайные стили...")
+    msg = await callback.message.edit_text("🎲 Генерирую случайные стили с AI-анализом...")
     data = await state.get_data()
-    
-    res = await prompt_generator.generate_styles_from_description("product image", data["aspect_ratio"], random=True)
-    
+
+    # Get product image bytes from state
+    product_image_bytes = data.get("product_image_bytes")
+    if not product_image_bytes:
+        await msg.edit_text("❌ Изображение товара не найдено.", reply_markup=get_style_selection_keyboard())
+        return
+
+    # Use vision-based product detection with random styles
+    res = await prompt_generator.generate_styles_with_vision(
+        product_image_bytes=product_image_bytes,
+        aspect_ratio=data["aspect_ratio"],
+        random=True
+    )
+
     if not res["success"]:
         await msg.edit_text("❌ Ошибка.", reply_markup=get_style_selection_keyboard())
         return
-        
+
     await state.update_data(product_name=res["product_name"], styles=res["styles"])
+
+    # Show detected product info if available
+    product_info = f"📦 {res['product_name']}"
+    if "product_type" in res:
+        product_info = f"📦 {res['product_name']} ({res['product_type']})"
+
     text = _format_styles_preview(res["styles"])
     await msg.edit_text(
-        f"🎲 <b>Случайные стили:</b>\n📦 {res['product_name']}\n\n{text}",
+        f"🎲 <b>Случайные стили:</b>\n{product_info}\n\n{text}",
         reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
