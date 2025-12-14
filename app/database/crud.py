@@ -554,7 +554,7 @@ async def get_user_detailed_stats(session: AsyncSession, telegram_id: int) -> di
         - aspect_ratios: usage breakdown by ratio
         - recent_activity: date of last generation
     """
-    from sqlalchemy import desc, case
+    from sqlalchemy import desc, case, func as sql_func, extract
 
     result = await session.execute(
         select(User).where(User.telegram_id == telegram_id)
@@ -572,12 +572,26 @@ async def get_user_detailed_stats(session: AsyncSession, telegram_id: int) -> di
             "total_spent": 0.0
         }
 
-    # Count total images generated
-    images_generated = user.total_images_processed
+    # Count total images generated - ACCURATE COUNT from ProcessedImage table
+    images_count_result = await session.execute(
+        select(func.count(ProcessedImage.id)).where(
+            ProcessedImage.user_id == user.id
+        )
+    )
+    images_generated = images_count_result.scalar() or 0
 
-    # Calculate photoshoots used (assuming 4 images per photoshoot on average)
-    # More accurate: count unique ProcessedImage creation timestamps within same hour
-    photoshoots_estimate = max(1, images_generated // 4)
+    # Count photoshoots - group images by creation time (within 1 minute = same photoshoot)
+    # PostgreSQL approach: Use date_trunc to group by minute
+    try:
+        # Try PostgreSQL date_trunc
+        photoshoots_result = await session.execute(
+            select(func.count(func.distinct(func.date_trunc('minute', ProcessedImage.created_at))))
+            .where(ProcessedImage.user_id == user.id)
+        )
+        photoshoots_used = photoshoots_result.scalar() or 0
+    except Exception:
+        # Fallback: estimate based on 4 images per photoshoot
+        photoshoots_used = max(1, images_generated // 4) if images_generated > 0 else 0
 
     # Count saved style presets
     saved_styles_count = (await session.execute(
@@ -640,7 +654,7 @@ async def get_user_detailed_stats(session: AsyncSession, telegram_id: int) -> di
     total_spent = total_spent_result.scalar() or 0.0
 
     return {
-        "photoshoots_used": photoshoots_estimate,
+        "photoshoots_used": photoshoots_used,
         "images_generated": images_generated,
         "saved_styles": saved_styles_count,
         "top_styles": top_styles,
