@@ -77,8 +77,8 @@ IMPORTANT RULES:
             user_prompt = """Analyze this product image and provide detailed information in the following JSON format:
 
 {
-    "product_type": "Specific product type (e.g., 'Wireless Headphones', 'Leather Wallet', 'Face Cream')",
-    "product_name": "Descriptive product name (e.g., 'Premium Over-Ear Wireless Headphones', 'Handcrafted Leather Bifold Wallet')",
+    "product_type": "Specific product type (e.g., 'Wireless Headphones', 'Leather Wallet', 'Face Cream') in Russian",
+    "product_name": "Descriptive product name (e.g., 'Premium Over-Ear Wireless Headphones', 'Handcrafted Leather Bifold Wallet') in Russian",
     "description": "Detailed description including materials, style, features, color, distinctive characteristics",
     "category": "One of: Fashion, Electronics, Beauty, Home, Food, Sports, Jewelry, Accessories, Other"
 }
