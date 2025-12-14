@@ -117,6 +117,32 @@ async def create_photoshoot_msg(message: Message, state: FSMContext):
     await message.answer("📸 Отправьте фото вашего товара (как фото или файл).")
     await state.set_state(PhotoshootStates.waiting_for_product_photo)
 
+@router.message(F.text == "📦 Пакетная обработка")
+async def batch_processing_menu(message: Message, state: FSMContext, session: AsyncSession):
+    """Handle batch processing menu - choose style source"""
+    from app.keyboards.inline import InlineKeyboardBuilder, InlineKeyboardButton
+    from app.services.style_manager import StyleManager
+
+    # Check if user has saved styles
+    saved_styles = await StyleManager.get_user_styles(session, message.from_user.id)
+
+    builder = InlineKeyboardBuilder()
+
+    if saved_styles:
+        builder.button(text="🎨 Использовать сохраненный стиль", callback_data="batch_use_saved_style")
+
+    builder.button(text="✨ Создать новый стиль", callback_data="batch_create_new_style")
+    builder.button(text="❌ Отмена", callback_data="back_to_menu")
+    builder.adjust(1)
+
+    await message.answer(
+        "📦 <b>Пакетная обработка</b>\n\n"
+        "Применить один стиль к нескольким фото товаров.\n\n"
+        "Выберите как создать стиль:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
 @router.message(F.text == "👥 Реферальная программа")
 async def referral_handler(message: Message, session: AsyncSession, bot: Bot):
     """Handle referral program menu"""
@@ -379,12 +405,43 @@ async def analyze_styles(callback: CallbackQuery, state: FSMContext):
     if "product_type" in res:
         product_info = f"📦 {res['product_name']} ({res['product_type']})"
 
-    text = _format_styles_preview(res["styles"])
-    await msg.edit_text(
-        f"✨ <b>Предложенные стили:</b>\n{product_info}\n\n{text}",
-        reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
-    )
-    await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+    # Check if this is for batch processing
+    batch_mode_create = data.get("batch_mode_create", False)
+
+    if batch_mode_create:
+        # Auto-start batch collection after style creation
+        await state.update_data(
+            batch_photos=[],
+            batch_styles=res["styles"],
+            batch_aspect_ratio=data["aspect_ratio"],
+            batch_product_name=res["product_name"],
+            batch_mode_create=False  # Clear flag
+        )
+        await state.set_state(PhotoshootStates.batch_style_collecting_photos)
+
+        from app.keyboards.inline import InlineKeyboardBuilder
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Готово, начать обработку", callback_data="batch_style_confirm")
+        builder.button(text="❌ Отмена", callback_data="batch_style_cancel")
+        builder.adjust(1)
+
+        text = _format_styles_preview(res["styles"])
+        await msg.edit_text(
+            f"📦 <b>Пакетная обработка - стиль создан!</b>\n\n"
+            f"{product_info}\n\n{text}\n\n"
+            f"📸 Теперь отправьте фото товаров для обработки.\n"
+            f"Когда закончите — нажмите <b>Готово</b>.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    else:
+        # Normal flow - show style preview
+        text = _format_styles_preview(res["styles"])
+        await msg.edit_text(
+            f"✨ <b>Предложенные стили:</b>\n{product_info}\n\n{text}",
+            reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 @router.callback_query(F.data == "styles:random")
 async def random_styles(callback: CallbackQuery, state: FSMContext):
@@ -836,6 +893,108 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
 
 
 # ==================== BATCH STYLE PROCESSING ====================
+
+@router.callback_query(F.data == "batch_use_saved_style")
+async def batch_use_saved_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Show saved styles for batch processing"""
+    await callback.answer()
+
+    from app.services.style_manager import StyleManager
+    from app.keyboards.inline import InlineKeyboardBuilder, InlineKeyboardButton
+
+    saved_styles = await StyleManager.get_user_styles(session, callback.from_user.id)
+
+    if not saved_styles:
+        await callback.message.edit_text(
+            "❌ У вас нет сохраненных стилей.\n\n"
+            "Создайте новый стиль для пакетной обработки.",
+            parse_mode="HTML"
+        )
+        return
+
+    builder = InlineKeyboardBuilder()
+
+    for style in saved_styles:
+        style_name = style.get("name", "Без названия")
+        style_count = len(style.get("styles", []))
+        aspect_ratio = style.get("aspect_ratio", "1:1")
+
+        builder.button(
+            text=f"🎨 {style_name} ({style_count} стилей, {aspect_ratio})",
+            callback_data=f"batch_select_saved:{style.get('id')}"
+        )
+
+    builder.button(text="❌ Отмена", callback_data="back_to_menu")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "📦 <b>Выберите сохраненный стиль</b>\n\n"
+        "Этот стиль будет применен ко всем фото:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("batch_select_saved:"))
+async def batch_select_saved_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Select saved style and start photo collection"""
+    await callback.answer()
+
+    from app.services.style_manager import StyleManager
+
+    # Extract preset ID
+    preset_id = int(callback.data.split(":")[1])
+
+    # Load the preset
+    preset = await StyleManager.get_style_by_id(session, preset_id, callback.from_user.id)
+
+    if not preset:
+        await callback.message.edit_text(
+            "❌ Стиль не найден.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Store style data in state
+    await state.update_data(
+        batch_photos=[],
+        batch_styles=preset.get("styles", []),
+        batch_aspect_ratio=preset.get("aspect_ratio", "1:1"),
+        batch_product_name=preset.get("name", "Товар")
+    )
+
+    await state.set_state(PhotoshootStates.batch_style_collecting_photos)
+
+    from app.keyboards.inline import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Готово, начать обработку", callback_data="batch_style_confirm")
+    builder.button(text="❌ Отмена", callback_data="batch_style_cancel")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"📦 <b>Пакетная обработка</b>\n\n"
+        f"🎨 Стиль: <b>{preset.get('name', 'Товар')}</b>\n"
+        f"📐 Пропорции: {preset.get('aspect_ratio', '1:1')}\n\n"
+        f"📸 Отправьте фото товаров для обработки.\n"
+        f"Когда закончите — нажмите <b>Готово</b>.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data == "batch_create_new_style")
+async def batch_create_new_style(callback: CallbackQuery, state: FSMContext):
+    """Start creating new style for batch processing"""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "📸 <b>Создание стиля для пакетной обработки</b>\n\n"
+        "Отправьте одно фото товара для анализа и создания стиля.\n\n"
+        "<i>Затем вы сможете применить этот стиль к остальным фото.</i>",
+        parse_mode="HTML"
+    )
+
+    await state.set_state(PhotoshootStates.waiting_for_product_photo)
+    # Set flag to indicate this is for batch processing
+    await state.update_data(batch_mode_create=True)
 
 @router.callback_query(F.data == "batch_style_start")
 async def batch_style_start(callback: CallbackQuery, state: FSMContext):
