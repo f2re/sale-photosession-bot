@@ -4,8 +4,11 @@ from sqlalchemy import select, func, and_, update, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import uuid
+import logging
 
 from .models import User, Package, Order, ProcessedImage, SupportTicket, SupportMessage, Admin, UTMEvent, ReferralReward, StylePreset
+
+logger = logging.getLogger(__name__)
 
 
 # ==================== USER OPERATIONS ====================
@@ -310,6 +313,26 @@ async def mark_order_paid(session: AsyncSession, invoice_id: str) -> Optional[Or
 
     # Add photoshoots to user balance
     order.user.images_remaining += order.package.photoshoots_count
+
+    # Track "purchase" event for UTM users
+    if order.user.utm_source or order.user.utm_medium or order.user.utm_campaign:
+        from app.services.yandex_metrika import metrika_service
+        await metrika_service.track_event(
+            session=session,
+            user_id=order.user.id,
+            event_type='purchase',
+            event_value=float(order.amount),
+            currency='RUB',
+            event_data={
+                'utm_source': order.user.utm_source,
+                'utm_medium': order.user.utm_medium,
+                'utm_campaign': order.user.utm_campaign,
+                'package_id': order.package_id,
+                'package_name': order.package.name,
+                'photoshoots_count': order.package.photoshoots_count
+            }
+        )
+        logger.info(f"Tracked 'purchase' event for UTM user {order.user.id}, amount: {order.amount}₽")
 
     # Referral reward
     if order.user.referred_by_id:
@@ -711,11 +734,221 @@ async def get_referral_stats(session: AsyncSession, user_id: int) -> dict:
     }
 
 # ==================== UTM ====================
-# (Minimal implementation for compatibility)
-async def get_utm_statistics(session: AsyncSession) -> List: return []
-async def get_conversion_funnel(session: AsyncSession) -> Dict: return {}
-async def get_utm_events_summary(session: AsyncSession, limit: int = 100) -> List: return []
-async def get_utm_sync_status(session: AsyncSession) -> Dict: return {'total_events': 0, 'sent_events': 0, 'pending_events': 0, 'sync_rate': 0}
+
+async def get_utm_statistics(session: AsyncSession) -> List[Dict[str, Any]]:
+    """
+    Get UTM statistics grouped by source, medium, and campaign.
+
+    Returns:
+        List of dicts with UTM stats including users, conversions, revenue
+    """
+    from sqlalchemy import func, case
+
+    # Get users with UTM data
+    stmt = select(
+        User.utm_source,
+        User.utm_medium,
+        User.utm_campaign,
+        func.count(User.id).label('total_users'),
+        func.count(case((Order.status == 'paid', Order.id))).label('paying_users'),
+        func.coalesce(func.sum(case((Order.status == 'paid', Order.amount), else_=0)), 0).label('revenue')
+    ).outerjoin(
+        Order, User.id == Order.user_id
+    ).where(
+        # Only users with at least one UTM parameter
+        (User.utm_source.isnot(None)) |
+        (User.utm_medium.isnot(None)) |
+        (User.utm_campaign.isnot(None))
+    ).group_by(
+        User.utm_source,
+        User.utm_medium,
+        User.utm_campaign
+    ).order_by(
+        func.count(User.id).desc()
+    )
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    stats = []
+    for row in rows:
+        total_users = row.total_users
+        paying_users = row.paying_users
+        revenue = float(row.revenue)
+
+        # Calculate metrics
+        conversion_rate = round((paying_users / total_users * 100), 2) if total_users > 0 else 0
+        arpu = round((revenue / total_users), 2) if total_users > 0 else 0
+
+        stats.append({
+            'utm_source': row.utm_source or 'unknown',
+            'utm_medium': row.utm_medium or 'unknown',
+            'utm_campaign': row.utm_campaign or 'unknown',
+            'total_users': total_users,
+            'paying_users': paying_users,
+            'conversion_rate': conversion_rate,
+            'revenue': revenue,
+            'arpu': arpu
+        })
+
+    return stats
+
+
+async def get_conversion_funnel(session: AsyncSession) -> Dict[str, Any]:
+    """
+    Get conversion funnel for UTM users.
+
+    Returns:
+        Dict with funnel metrics: starts, first_images, purchases, conversion rates
+    """
+    # Count UTM users (start)
+    starts_stmt = select(func.count(User.id)).where(
+        (User.utm_source.isnot(None)) |
+        (User.utm_medium.isnot(None)) |
+        (User.utm_campaign.isnot(None))
+    )
+    starts_result = await session.execute(starts_stmt)
+    starts = starts_result.scalar() or 0
+
+    # Count UTM users who generated at least one image (first_image)
+    first_images_stmt = select(func.count(func.distinct(User.id))).select_from(User).join(
+        ProcessedImage, User.id == ProcessedImage.user_id
+    ).where(
+        (User.utm_source.isnot(None)) |
+        (User.utm_medium.isnot(None)) |
+        (User.utm_campaign.isnot(None))
+    )
+    first_images_result = await session.execute(first_images_stmt)
+    first_images = first_images_result.scalar() or 0
+
+    # Count UTM users who made a purchase
+    purchases_stmt = select(func.count(func.distinct(User.id))).select_from(User).join(
+        Order, User.id == Order.user_id
+    ).where(
+        Order.status == 'paid'
+    ).where(
+        (User.utm_source.isnot(None)) |
+        (User.utm_medium.isnot(None)) |
+        (User.utm_campaign.isnot(None))
+    )
+    purchases_result = await session.execute(purchases_stmt)
+    purchases = purchases_result.scalar() or 0
+
+    # Calculate conversion rates
+    start_to_first_image_rate = round((first_images / starts * 100), 2) if starts > 0 else 0
+    first_image_to_purchase_rate = round((purchases / first_images * 100), 2) if first_images > 0 else 0
+    overall_conversion_rate = round((purchases / starts * 100), 2) if starts > 0 else 0
+
+    return {
+        'starts': starts,
+        'first_images': first_images,
+        'purchases': purchases,
+        'start_to_first_image_rate': start_to_first_image_rate,
+        'first_image_to_purchase_rate': first_image_to_purchase_rate,
+        'overall_conversion_rate': overall_conversion_rate
+    }
+
+
+async def get_utm_events_summary(session: AsyncSession, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Get recent UTM events.
+
+    Args:
+        limit: Maximum number of events to return
+
+    Returns:
+        List of dicts with event data
+    """
+    stmt = select(
+        UTMEvent,
+        User.telegram_id,
+        User.username,
+        User.utm_source,
+        User.utm_medium,
+        User.utm_campaign
+    ).join(
+        User, UTMEvent.user_id == User.id
+    ).order_by(
+        UTMEvent.created_at.desc()
+    ).limit(limit)
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    events = []
+    for row in rows:
+        event = row.UTMEvent
+        events.append({
+            'id': event.id,
+            'event_type': event.event_type,
+            'user_id': row.telegram_id,
+            'username': row.username,
+            'utm_source': row.utm_source,
+            'utm_medium': row.utm_medium,
+            'utm_campaign': row.utm_campaign,
+            'event_value': float(event.event_value) if event.event_value else None,
+            'currency': event.currency,
+            'sent_to_metrika': event.sent_to_metrika,
+            'created_at': event.created_at.isoformat() if event.created_at else None
+        })
+
+    return events
+
+
+async def get_utm_sync_status(session: AsyncSession) -> Dict[str, Any]:
+    """
+    Get synchronization status with Yandex Metrika.
+
+    Returns:
+        Dict with sync stats: total, sent, pending counts and rates
+    """
+    # Total events
+    total_stmt = select(func.count(UTMEvent.id))
+    total_result = await session.execute(total_stmt)
+    total_events = total_result.scalar() or 0
+
+    # Sent events
+    sent_stmt = select(func.count(UTMEvent.id)).where(UTMEvent.sent_to_metrika == True)
+    sent_result = await session.execute(sent_stmt)
+    sent_events = sent_result.scalar() or 0
+
+    # Pending events
+    pending_events = total_events - sent_events
+
+    # Sync rate
+    sync_rate = round((sent_events / total_events * 100), 2) if total_events > 0 else 0
+
+    # Get last sent timestamp
+    last_sent_stmt = select(func.max(UTMEvent.sent_at)).where(UTMEvent.sent_to_metrika == True)
+    last_sent_result = await session.execute(last_sent_stmt)
+    last_sent_at = last_sent_result.scalar()
+
+    # Get last pending timestamp
+    last_pending_stmt = select(func.max(UTMEvent.created_at)).where(UTMEvent.sent_to_metrika == False)
+    last_pending_result = await session.execute(last_pending_stmt)
+    last_pending_at = last_pending_result.scalar()
+
+    # Get pending breakdown by event type
+    pending_breakdown_stmt = select(
+        UTMEvent.event_type,
+        func.count(UTMEvent.id).label('count')
+    ).where(
+        UTMEvent.sent_to_metrika == False
+    ).group_by(
+        UTMEvent.event_type
+    )
+    pending_breakdown_result = await session.execute(pending_breakdown_stmt)
+    pending_breakdown = {row.event_type: row.count for row in pending_breakdown_result.all()}
+
+    return {
+        'total_events': total_events,
+        'sent_events': sent_events,
+        'pending_events': pending_events,
+        'sync_rate': sync_rate,
+        'last_sent_at': last_sent_at.isoformat() if last_sent_at else None,
+        'last_pending_at': last_pending_at.isoformat() if last_pending_at else None,
+        'pending_breakdown': pending_breakdown
+    }
 
 # ==================== BALANCE OPERATIONS (Compatibility) ====================
 
