@@ -21,6 +21,7 @@ from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu, get_
 from app.services.prompt_generator import PromptGenerator
 from app.services.image_processor import ImageProcessor
 from app.services.style_manager import StyleManager
+from app.services.yandex_metrika import metrika_service
 from app.database.crud import (
     get_or_create_user,
     update_user_images_count,
@@ -30,6 +31,7 @@ from app.database.crud import (
     get_user_detailed_stats
 )
 from app.utils.message_helpers import safe_edit_text
+from app.utils.utm_parser import parse_utm_from_start_param
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -40,29 +42,58 @@ image_processor = ImageProcessor()
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, command: Command = None):
-    # Parse referral code if present
+    # Parse UTM parameters and referral code from command args
     referral_code = None
-    if command and command.args and command.args.startswith("ref_"):
-        referral_code = command.args.replace("ref_", "")
+    utm_params = {}
 
-    # Create user (passing referral code logic to CRUD or handling it here)
-    # We'll handle it here for simplicity: check if new user, if so, link to referrer
-    
-    # Check if user exists first to know if it's a new registration
-    # (Simplified: get_or_create checks, but we need to pass referrer if new)
-    
-    # We can pass referral_code to get_or_create_user if we update it, 
-    # or just let get_or_create return the user and 'created' flag.
-    # Since we can't easily change get_or_create signature safely without checking usages,
-    # let's assume get_or_create just gets/creates.
-    
+    if command and command.args:
+        # Check if it's a referral link
+        if command.args.startswith("ref_"):
+            referral_code = command.args.replace("ref_", "")
+        else:
+            # Parse UTM parameters from start parameter
+            utm_params = parse_utm_from_start_param(command.args)
+            logger.info(f"Parsed UTM params for user {message.from_user.id}: {utm_params}")
+
+    # Check if user already exists to know if this is a new user
+    from sqlalchemy import select
+    from app.database.models import User
+
+    result = await session.execute(
+        select(User).where(User.telegram_id == message.from_user.id)
+    )
+    existing_user = result.scalar_one_or_none()
+    is_new_user = existing_user is None
+
+    # Create or update user with UTM parameters
     user = await get_or_create_user(
         session=session,
         telegram_id=message.from_user.id,
         username=message.from_user.username,
         first_name=message.from_user.first_name,
-        last_name=message.from_user.last_name
+        last_name=message.from_user.last_name,
+        utm_source=utm_params.get('utm_source'),
+        utm_medium=utm_params.get('utm_medium'),
+        utm_campaign=utm_params.get('utm_campaign'),
+        utm_content=utm_params.get('utm_content'),
+        utm_term=utm_params.get('utm_term')
     )
+
+    # Track "start" event for new users with UTM
+    if is_new_user and (user.utm_source or user.utm_medium or user.utm_campaign):
+        await metrika_service.track_event(
+            session=session,
+            user_id=user.id,
+            event_type='start',
+            event_data={
+                'utm_source': user.utm_source,
+                'utm_medium': user.utm_medium,
+                'utm_campaign': user.utm_campaign,
+                'utm_content': user.utm_content,
+                'utm_term': user.utm_term
+            }
+        )
+        logger.info(f"Tracked 'start' event for new UTM user {user.id}")
     
     # If user was just created (or has no referrer) and we have a code
     if referral_code and not user.referred_by_id and str(user.telegram_id) != referral_code:
@@ -553,6 +584,20 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
 
         # Deduct balance only if generation was successful
         await update_user_images_count(session, user.id, -1)
+
+        # Track "first_image" event for UTM users on their first generation
+        if user.total_images_processed == 0 and (user.utm_source or user.utm_medium or user.utm_campaign):
+            await metrika_service.track_event(
+                session=session,
+                user_id=user.id,
+                event_type='first_image',
+                event_data={
+                    'utm_source': user.utm_source,
+                    'utm_medium': user.utm_medium,
+                    'utm_campaign': user.utm_campaign
+                }
+            )
+            logger.info(f"Tracked 'first_image' event for UTM user {user.id}")
 
         media = []
         successful_count = 0
