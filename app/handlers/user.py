@@ -42,13 +42,22 @@ image_processor = ImageProcessor()
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, command: Command = None):
-    # Parse UTM parameters and referral code from command args
+    # Parse command arguments
     referral_code = None
     utm_params = {}
+    package_id = None
 
     if command and command.args:
+        # Check if it's a direct package purchase link (package_2 or buy_2)
+        if command.args.startswith("package_") or command.args.startswith("buy_"):
+            try:
+                # Extract package ID from "package_2" or "buy_2"
+                package_id = int(command.args.split("_")[1])
+                logger.info(f"Direct package purchase link detected: package_id={package_id}")
+            except (IndexError, ValueError):
+                logger.warning(f"Invalid package link format: {command.args}")
         # Check if it's a referral link
-        if command.args.startswith("ref_"):
+        elif command.args.startswith("ref_"):
             referral_code = command.args.replace("ref_", "")
         else:
             # Parse UTM parameters from start parameter
@@ -142,6 +151,10 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, 
 Просто отправьте фото товара, чтобы начать! 📷
 """
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=get_main_menu())
+
+    # If direct package purchase link was used, show package card
+    if package_id:
+        await show_package_card(message, session, package_id)
 
 @router.message(F.text == "📸 Создать фотосессию товара")
 async def create_photoshoot_msg(message: Message, state: FSMContext):
@@ -935,6 +948,77 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_main_menu()
     )
     await callback.answer()
+
+
+# ==================== DIRECT PACKAGE PURCHASE ====================
+
+async def show_package_card(message: Message, session: AsyncSession, package_id: int):
+    """
+    Show package card for direct purchase via deep link.
+
+    Args:
+        message: Telegram message
+        session: Database session
+        package_id: ID of the package to show
+    """
+    try:
+        from app.database.crud import get_package_by_id
+
+        # Get package from database
+        package = await get_package_by_id(session, package_id)
+
+        if not package or not package.is_active:
+            await message.answer(
+                "❌ <b>Пакет не найден</b>\n\n"
+                "Этот пакет больше не доступен для покупки.\n"
+                "Посмотрите другие пакеты в меню 💎 Купить пакет",
+                parse_mode="HTML"
+            )
+            return
+
+        # Calculate price per photoshoot
+        price_per_photoshoot = float(package.price_rub) / package.photoshoots_count
+        total_images = package.photoshoots_count * 4  # 4 images per photoshoot
+
+        # Build package card text
+        text = (
+            f"💎 <b>{package.name}</b>\n\n"
+            f"📦 <b>Содержимое:</b>\n"
+            f"   🎬 {package.photoshoots_count} фотосессий\n"
+            f"   🖼️ {total_images} изображений (по 4 в каждой фотосессии)\n\n"
+            f"💰 <b>Цена:</b> {package.price_rub}₽\n"
+            f"💵 <b>Цена за фотосессию:</b> ~{price_per_photoshoot:.0f}₽\n\n"
+            f"✨ <b>Что вы получите:</b>\n"
+            f"   • Профессиональные фото товаров в разных стилях\n"
+            f"   • AI-анализ и подбор стилей под товар\n"
+            f"   • Возможность сохранения любимых стилей\n"
+            f"   • Пакетная обработка нескольких фото\n\n"
+            f"Готовы к покупке?"
+        )
+
+        # Create inline keyboard with purchase button
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"💳 Купить за {package.price_rub}₽",
+                callback_data=f"buy_package:{package_id}"
+            )],
+            [InlineKeyboardButton(
+                text="📋 Посмотреть все пакеты",
+                callback_data="show_packages"
+            )]
+        ])
+
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        logger.info(f"Showed package card for package_id={package_id} to user {message.from_user.id}")
+
+    except Exception as e:
+        logger.error(f"Error showing package card: {e}", exc_info=True)
+        await message.answer(
+            "❌ Произошла ошибка при загрузке пакета.\n"
+            "Попробуйте выбрать пакет из меню 💎 Купить пакет",
+            parse_mode="HTML"
+        )
 
 
 # ==================== BATCH STYLE PROCESSING ====================
