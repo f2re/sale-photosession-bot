@@ -32,6 +32,8 @@ class AdminStates(StatesGroup):
     waiting_for_user_id = State()
     waiting_for_images_count = State()
     waiting_for_refund_order_id = State()
+    waiting_for_message_user_id = State()
+    waiting_for_message_text = State()
 
 
 @router.message(Command("admin"))
@@ -1332,3 +1334,192 @@ async def utm_upload_handler(message: Message):
             "• Проблемы с сетью",
             parse_mode="HTML"
         )
+
+
+# ==================== DIRECT MESSAGE TO USER ====================
+
+@router.message(Command("message"))
+@admin_only
+async def send_message_to_user_command(message: Message, state: FSMContext):
+    """
+    Send direct message to user by ID.
+
+    Usage:
+    /message <user_id> <text>
+
+    Example:
+    /message 123456789 Здравствуйте! По вашему вопросу...
+    """
+    try:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await message.answer(
+                "📨 <b>Отправка сообщения пользователю</b>\n\n"
+                "<b>Использование:</b>\n"
+                "/message &lt;user_id&gt; &lt;текст сообщения&gt;\n\n"
+                "<b>Пример:</b>\n"
+                "/message 123456789 Здравствуйте! По вашему вопросу о возврате...\n\n"
+                "<i>User ID можно найти в обращениях в поддержку или в списке заказов</i>",
+                parse_mode="HTML"
+            )
+            return
+
+        user_id = int(parts[1])
+        message_text = parts[2]
+
+    except (IndexError, ValueError):
+        await message.answer(
+            "❌ <b>Ошибка формата</b>\n\n"
+            "User ID должен быть числом.\n\n"
+            "Используйте: /message &lt;user_id&gt; &lt;текст&gt;",
+            parse_mode="HTML"
+        )
+        return
+
+    # Verify user exists
+    db = get_db()
+    async with db.get_session() as session:
+        user = await get_or_create_user(session, user_id)
+
+        if not user:
+            await message.answer(f"❌ Пользователь с ID {user_id} не найден")
+            return
+
+        # Send message to user
+        try:
+            await message.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"💬 <b>Сообщение от администратора</b>\n\n"
+                    f"{message_text}\n\n"
+                    f"<i>Для ответа используйте меню 💬 Поддержка</i>"
+                ),
+                parse_mode="HTML"
+            )
+
+            # Confirm to admin
+            await message.answer(
+                f"✅ <b>Сообщение отправлено!</b>\n\n"
+                f"👤 Пользователь: {user_id} (@{user.username or 'N/A'})\n"
+                f"💬 Ваше сообщение:\n{message_text[:200]}{'...' if len(message_text) > 200 else ''}",
+                parse_mode="HTML"
+            )
+
+        except TelegramBadRequest as e:
+            await message.answer(
+                f"❌ <b>Ошибка отправки</b>\n\n"
+                f"Не удалось отправить сообщение пользователю {user_id}.\n\n"
+                f"Возможные причины:\n"
+                f"• Пользователь заблокировал бота\n"
+                f"• Пользователь не запускал бота\n"
+                f"• Неверный ID\n\n"
+                f"Ошибка: {str(e)}",
+                parse_mode="HTML"
+            )
+
+
+@router.callback_query(F.data == "admin_send_message")
+@admin_only
+async def admin_send_message_start(callback: CallbackQuery, state: FSMContext):
+    """Start sending direct message to user (via admin panel)"""
+    await state.set_state(AdminStates.waiting_for_message_user_id)
+
+    await callback.message.edit_text(
+        "📨 <b>Отправка сообщения пользователю</b>\n\n"
+        "Введите Telegram ID пользователя:\n\n"
+        "<i>ID можно найти в обращениях в поддержку или в списке заказов</i>",
+        parse_mode="HTML",
+        reply_markup=get_admin_cancel()
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_message_user_id, F.text)
+@admin_only
+async def admin_send_message_get_user_id(message: Message, state: FSMContext):
+    """Process user ID for sending message"""
+    try:
+        user_id = int(message.text)
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Введите числовое значение.")
+        return
+
+    # Verify user exists
+    db = get_db()
+    async with db.get_session() as session:
+        user = await get_or_create_user(session, user_id)
+
+    await state.update_data(message_target_user_id=user_id)
+    await state.set_state(AdminStates.waiting_for_message_text)
+
+    await message.answer(
+        f"✅ <b>Пользователь найден</b>\n\n"
+        f"👤 ID: {user.telegram_id}\n"
+        f"📱 Username: @{user.username or 'N/A'}\n"
+        f"💎 Баланс: {user.images_remaining}\n\n"
+        f"Теперь введите текст сообщения:",
+        parse_mode="HTML"
+    )
+
+
+@router.message(AdminStates.waiting_for_message_text, F.text)
+@admin_only
+async def admin_send_message_send(message: Message, state: FSMContext):
+    """Send message to user"""
+    data = await state.get_data()
+    user_id = data.get('message_target_user_id')
+
+    if not user_id:
+        await message.answer("❌ Ошибка: ID пользователя не найден")
+        return
+
+    message_text = message.text
+
+    # Validate message length
+    if len(message_text) < 1:
+        await message.answer("❌ Сообщение не может быть пустым")
+        return
+
+    if len(message_text) > 4096:
+        await message.answer("❌ Сообщение слишком длинное (максимум 4096 символов)")
+        return
+
+    # Send message to user
+    try:
+        await message.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"💬 <b>Сообщение от администратора</b>\n\n"
+                f"{message_text}\n\n"
+                f"<i>Для ответа используйте меню 💬 Поддержка</i>"
+            ),
+            parse_mode="HTML"
+        )
+
+        # Get user info for confirmation
+        db = get_db()
+        async with db.get_session() as session:
+            user = await get_or_create_user(session, user_id)
+
+        # Confirm to admin
+        await message.answer(
+            f"✅ <b>Сообщение отправлено!</b>\n\n"
+            f"👤 Пользователь: {user_id} (@{user.username or 'N/A'})\n"
+            f"💬 Ваше сообщение:\n{message_text[:200]}{'...' if len(message_text) > 200 else ''}",
+            parse_mode="HTML"
+        )
+
+        await state.clear()
+
+    except TelegramBadRequest as e:
+        await message.answer(
+            f"❌ <b>Ошибка отправки</b>\n\n"
+            f"Не удалось отправить сообщение пользователю {user_id}.\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь заблокировал бота\n"
+            f"• Пользователь не запускал бота\n"
+            f"• Неверный ID\n\n"
+            f"Ошибка: {str(e)}",
+            parse_mode="HTML"
+        )
+        await state.clear()
