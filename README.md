@@ -61,27 +61,89 @@ Telegram bot for generating professional product photography using AI.
 
 **Формат:** `source_medium_campaign_content_term`
 
-**Примеры ссылок:**
-```
-https://t.me/YOUR_BOT?start=yd_cpc_sellers_banner1
-https://t.me/YOUR_BOT?start=vk_cpm_winter_video
-https://t.me/YOUR_BOT?start=tg_cpc_blackfriday
-```
+**Структура параметров:**
+- **source** (обязательный) - источник трафика (yd, vk, tg, и т.д.)
+- **medium** (опциональный) - тип кампании (cpc, cpm, cpa)
+- **campaign** (опциональный) - название кампании (любое слово без пробелов)
+- **content** (опциональный) - вариант креатива/объявления
+- **term** (опциональный) - ключевое слово/таргетинг
 
-**Сокращения (shortcuts):**
-- Источники: `yd` (Яндекс.Директ), `rsya` (РСЯ), `vk` (VK Ads), `tg` (Telegram Ads), `fb` (Facebook), `ig` (Instagram), `gg` (Google)
-- Типы: `cpc` (за клик), `cpm` (за показы), `cpa` (за действие)
+**Примеры:**
+
+1. **Минимальная ссылка** (только источник):
+   ```
+   https://t.me/YOUR_BOT?start=yd
+   → utm_source=yandex_direct
+   ```
+
+2. **Источник + тип** (рекомендуется минимум):
+   ```
+   https://t.me/YOUR_BOT?start=yd_cpc
+   → utm_source=yandex_direct, utm_medium=cpc
+   ```
+
+3. **Полная ссылка с кампанией**:
+   ```
+   https://t.me/YOUR_BOT?start=yd_cpc_sellers
+   → utm_source=yandex_direct, utm_medium=cpc, utm_campaign=sellers
+   ```
+
+4. **С креативом**:
+   ```
+   https://t.me/YOUR_BOT?start=vk_cpm_winter_video
+   → utm_source=vk_ads, utm_medium=cpm, utm_campaign=winter, utm_content=video
+   ```
+
+5. **Полная разметка**:
+   ```
+   https://t.me/YOUR_BOT?start=tg_cpc_blackfriday_banner1_clothing
+   → utm_source=telegram_ads, utm_medium=cpc, utm_campaign=blackfriday,
+     utm_content=banner1, utm_term=clothing
+   ```
+
+**Доступные сокращения (shortcuts):**
+
+Источники трафика:
+- `yd` → `yandex_direct` (Яндекс.Директ)
+- `rsya` → `yandex_rsya` (РСЯ - Рекламная Сеть Яндекса)
+- `vk` → `vk_ads` (VK Реклама)
+- `tg` → `telegram_ads` (Telegram Ads)
+- `fb` → `facebook` (Facebook Ads)
+- `ig` → `instagram` (Instagram Ads)
+- `gg` → `google` (Google Ads)
+
+Типы кампаний:
+- `cpc` → `cpc` (Cost Per Click - оплата за клик)
+- `cpm` → `cpm` (Cost Per Mille - оплата за показы)
+- `cpa` → `cpa` (Cost Per Action - оплата за действие)
+- `retarget` → `retargeting` (Ретаргетинг)
+- `organic` → `organic` (Органический трафик)
+- `referral` → `referral` (Реферальный трафик)
+- `social` → `social` (Социальные сети)
+- `banner` → `banner` (Баннерная реклама)
 
 #### 2. Полный формат (для остальных платформ)
 
-Стандартный формат UTM меток.
+Стандартный формат UTM меток. Все параметры опциональны.
 
 **Формат:** `utm_source-VALUE_utm_medium-VALUE_utm_campaign-VALUE_utm_content-VALUE_utm_term-VALUE`
 
-**Пример ссылки:**
-```
-https://t.me/YOUR_BOT?start=utm_source-yandex_utm_medium-cpc_utm_campaign-sellers_utm_content-banner1
-```
+**Примеры:**
+
+1. **Только источник**:
+   ```
+   https://t.me/YOUR_BOT?start=utm_source-yandex
+   ```
+
+2. **Источник + кампания**:
+   ```
+   https://t.me/YOUR_BOT?start=utm_source-yandex_utm_campaign-sellers
+   ```
+
+3. **Полная ссылка**:
+   ```
+   https://t.me/YOUR_BOT?start=utm_source-yandex_utm_medium-cpc_utm_campaign-sellers_utm_content-banner1
+   ```
 
 ### Настройка Яндекс.Метрики (опционально)
 
@@ -218,10 +280,124 @@ link = generate_utm_link(
 
 ### Важные замечания
 
-1. **Первый переход считается** - UTM метки сохраняются только при первом запуске бота пользователем
-2. **Метрика опциональна** - события сохраняются в БД даже без настройки Метрики
-3. **Автоматическая загрузка** - события загружаются в Метрику каждый час автоматически
-4. **Реферальные ссылки** - формат `?start=ref_CODE` зарезервирован для реферальной программы
+#### 1. Сохранение UTM меток - только для новых пользователей
+
+**⚠️ ВАЖНО:** UTM метки сохраняются **ТОЛЬКО** при первом запуске бота пользователем.
+
+**Как это работает:**
+
+- **Новый пользователь** → UTM метки сохраняются в профиле навсегда
+  ```
+  Пользователь впервые открыл: https://t.me/bot?start=yd_cpc_sellers
+  → В базе сохранится: utm_source=yandex_direct, utm_medium=cpc, utm_campaign=sellers
+  ```
+
+- **Существующий пользователь** → UTM метки НЕ изменяются
+  ```
+  Тот же пользователь позже открыл: https://t.me/bot?start=vk_cpm_winter
+  → В базе останется: utm_source=yandex_direct, utm_medium=cpc, utm_campaign=sellers
+  → Новые UTM метки игнорируются!
+  ```
+
+**Почему так:**
+- Первый источник клика является основным для аналитики (First Click Attribution)
+- Это стандартная практика в маркетинге для корректного подсчета конверсий
+- Позволяет точно определить, какая кампания привела пользователя
+
+#### 2. Для каких пользователей работает UTM статистика
+
+UTM статистика показывает **ТОЛЬКО** пользователей, которые:
+- Пришли по ссылке с UTM метками
+- Являются **новыми** пользователями (зарегистрировались через UTM-ссылку)
+
+**НЕ отслеживаются:**
+- Пользователи, запустившие бота без UTM меток
+- Пользователи, запустившие бота через прямую ссылку `t.me/bot`
+- Пользователи, запустившие бота через поиск в Telegram
+- Существующие пользователи, перешедшие по новой UTM-ссылке
+
+#### 3. Как создать и разделить метки для разных групп
+
+**Пример разделения трафика:**
+
+**Яндекс.Директ - разные кампании:**
+```
+Кампания 1 "Продавцы на маркетплейсах":
+https://t.me/bot?start=yd_cpc_sellers
+
+Кампания 2 "Фотографы":
+https://t.me/bot?start=yd_cpc_photographers
+
+Кампания 3 "Бизнес":
+https://t.me/bot?start=yd_cpc_business
+```
+
+**Разные креативы в одной кампании:**
+```
+Баннер 1:
+https://t.me/bot?start=yd_cpc_sellers_banner1
+
+Баннер 2:
+https://t.me/bot?start=yd_cpc_sellers_banner2
+
+Видео:
+https://t.me/bot?start=yd_cpc_sellers_video
+```
+
+**Разные источники:**
+```
+Яндекс.Директ:
+https://t.me/bot?start=yd_cpc_winter
+
+VK Реклама:
+https://t.me/bot?start=vk_cpm_winter
+
+Telegram Ads:
+https://t.me/bot?start=tg_cpc_winter
+
+Instagram:
+https://t.me/bot?start=ig_cpc_winter
+```
+
+**Группировка в статистике:**
+- По источнику (`utm_source`) - откуда пришли пользователи
+- По кампании (`utm_campaign`) - из какой конкретной кампании
+- По креативу (`utm_content`) - какой баннер/объявление сработало лучше
+- По ключевым словам (`utm_term`) - по каким запросам нашли
+
+#### 4. Отслеживаемые события
+
+Бот автоматически отслеживает 3 события для UTM-пользователей:
+
+1. **start** - регистрация (запуск бота первый раз)
+   - Фиксируется сразу при первом входе
+   - Только для пользователей с UTM метками
+
+2. **first_image** - первая генерация фото
+   - Фиксируется при первой успешной генерации
+   - Показывает, сколько пользователей дошли до использования бота
+
+3. **purchase** - покупка пакета
+   - Фиксируется при успешной оплате
+   - Включает сумму покупки для расчета ROI
+
+**Воронка конверсии:**
+```
+100 пользователей (start - зарегистрировались)
+    ↓ 65%
+65 пользователей (first_image - попробовали генерацию)
+    ↓ 15%
+10 пользователей (purchase - купили пакет)
+
+Общая конверсия: 10%
+```
+
+#### 5. Техническая информация
+
+- **Метрика опциональна** - события сохраняются в БД даже без настройки Метрики
+- **Автоматическая загрузка** - события загружаются в Метрику каждый час автоматически
+- **Реферальные ссылки** - формат `?start=ref_CODE` зарезервирован для реферальной программы и не конфликтует с UTM
+- **Прямые ссылки на пакеты** - форматы `?start=package_ID` и `?start=buy_ID` также не конфликтуют с UTM
 
 ## Admin Commands and Features
 
