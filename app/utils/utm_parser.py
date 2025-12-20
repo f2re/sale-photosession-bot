@@ -168,14 +168,19 @@ def _parse_full_utm_format(param: str) -> Dict[str, Optional[str]]:
         'utm_term': None
     }
 
-    # Split by underscore to get utm_key-value pairs
-    pairs = param.split('_')
+    # Use regex to split by _utm_ pattern while preserving the utm_ prefix
+    import re
 
-    for pair in pairs:
-        if '-' not in pair:
+    # Split by _utm_ but keep utm_ prefix for next match
+    # Example: "utm_source-yandex_utm_medium-cpc" -> ["utm_source-yandex", "utm_medium-cpc"]
+    parts = re.split(r'_(?=utm_)', param)
+
+    for part in parts:
+        if '-' not in part:
             continue
 
-        key, value = pair.split('-', 1)
+        # Split key-value by first dash
+        key, value = part.split('-', 1)
 
         # URL decode value
         value = urllib.parse.unquote(value)
