@@ -22,7 +22,7 @@ class ImageProcessor:
         self.nanobanana = NanoBananaService()
         self.openrouter_api_key = settings.OPENROUTER_API_KEY
         self.vision_model = "google/gemini-2.0-flash-exp:free"  # Fast and free vision model
-    
+
     def _convert_webp_to_png(self, image_bytes: bytes) -> bytes:
         try:
             img = Image.open(BytesIO(image_bytes))
@@ -36,14 +36,14 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"WebP conversion error: {e}")
             raise
-    
+
     async def analyze_product_image(self, image_bytes: bytes) -> Dict:
         """
         Analyze product image using vision API to extract product details.
-        
+
         Args:
             image_bytes: Product image bytes
-            
+
         Returns:
             {
                 "success": bool,
@@ -53,23 +53,23 @@ class ImageProcessor:
         """
         try:
             logger.info("Starting product image analysis with vision API")
-            
+
             # Convert image to base64
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
-            
+
             # Detect image format
             image = Image.open(BytesIO(image_bytes))
             image_format = image.format.lower() if image.format else 'jpeg'
             mime_type = f"image/{image_format}"
-            
+
             # Prepare request
             headers = {
                 "Authorization": f"Bearer {self.openrouter_api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://t.me/@SalePhotosession_bot",
+                "HTTP-Referer": "SalePhotosession_bot",
                 "X-Title": "Product Photoshoot Bot"
             }
-            
+
             # Product analysis prompt
             analysis_prompt = """Analyze this product image and provide a detailed description.
 
@@ -85,7 +85,7 @@ Example format:
 "A premium amber glass candle jar with minimalist black label. The product has a cylindrical shape with visible wax texture and appears to be a luxury home fragrance item. Clean, modern aesthetic with natural materials."
 
 Your description:"""
-            
+
             payload = {
                 "model": self.vision_model,
                 "messages": [
@@ -108,9 +108,9 @@ Your description:"""
                 "temperature": 0.3,  # Low temperature for consistent analysis
                 "max_tokens": 300
             }
-            
+
             logger.info(f"Sending product analysis request to vision API (model: {self.vision_model})")
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     "https://openrouter.ai/api/v1/chat/completions",
@@ -120,12 +120,12 @@ Your description:"""
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
-                        
+
                         # Extract description from response
                         description = result['choices'][0]['message']['content'].strip()
-                        
+
                         logger.info(f"Product analysis successful: {description[:100]}...")
-                        
+
                         return {
                             "success": True,
                             "product_description": description,
@@ -134,24 +134,24 @@ Your description:"""
                     else:
                         error_text = await response.text()
                         logger.error(f"Vision API error: {response.status} - {error_text}")
-                        
+
                         # Fallback to generic description
                         return {
                             "success": False,
                             "product_description": "A high-end commercial product",
                             "error": f"API error: {response.status}"
                         }
-                        
+
         except Exception as e:
             logger.error(f"Error analyzing product image: {e}", exc_info=True)
-            
+
             # Fallback to generic description
             return {
                 "success": False,
                 "product_description": "A high-end commercial product",
                 "error": str(e)
             }
-    
+
     async def generate_photoshoot(
         self,
         product_image_bytes: bytes,
@@ -256,14 +256,14 @@ Your description:"""
                     bot, user.telegram_id, user.username, "NanoBanana",
                     f"Failed {total_styles-successful_count}/{total_styles} images"
                 )
-            
+
             return {
                 "success": successful_count > 0,
                 "images": images,
                 "successful_count": successful_count,
                 "error": None if successful_count > 0 else "All generations failed"
             }
-            
+
         except Exception as e:
             logger.error(f"Critical error in generate_photoshoot: {e}", exc_info=True)
             return {"success": False, "error": "Internal processing error"}
@@ -271,21 +271,21 @@ Your description:"""
     async def _generate_single_variant(self, img_bytes, prompt, style_name, ratio):
         """
         Generate single image variant using NanoBanana API.
-        
+
         Args:
             img_bytes: Product image bytes
             prompt: Style prompt
             style_name: Style name for logging
             ratio: Aspect ratio
-            
+
         Returns:
             Result dict with success, image_bytes, and error fields
         """
         try:
             logger.info(f"Generating '{style_name}' with ratio {ratio}")
             return await self.nanobanana.generate_image(
-                prompt=prompt, 
-                reference_image_bytes=img_bytes, 
+                prompt=prompt,
+                reference_image_bytes=img_bytes,
                 aspect_ratio=ratio
             )
         except Exception as e:

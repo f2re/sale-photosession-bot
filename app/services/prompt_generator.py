@@ -474,7 +474,7 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://t.me/@SalePhotosession_bot",
+                "HTTP-Referer": "SalePhotosession_bot",
                 "X-Title": "Product Photoshoot Bot"
             }
 
