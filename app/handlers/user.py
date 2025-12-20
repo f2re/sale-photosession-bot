@@ -588,6 +588,26 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
             return
 
         data = await state.get_data()
+
+        # Validate required data
+        if "styles" not in data:
+            await callback.message.edit_text(
+                "❌ Ошибка: стили не найдены.\n\n"
+                "Пожалуйста, начните сначала - отправьте фото товара.",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+
+        if "product_image_bytes" not in data:
+            await callback.message.edit_text(
+                "❌ Ошибка: изображение товара не найдено.\n\n"
+                "Пожалуйста, начните сначала - отправьте фото товара.",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+
         styles = data["styles"]
         styles_count = len(styles)
         aspect_ratio = data.get("aspect_ratio", "1:1")
