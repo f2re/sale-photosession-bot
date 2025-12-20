@@ -81,6 +81,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, 
         username=message.from_user.username,
         first_name=message.from_user.first_name,
         last_name=message.from_user.last_name,
+        free_photoshoots_count=settings.FREE_PHOTOSHOOTS_COUNT,  # Use value from config/env
         utm_source=utm_params.get('utm_source'),
         utm_medium=utm_params.get('utm_medium'),
         utm_campaign=utm_params.get('utm_campaign'),

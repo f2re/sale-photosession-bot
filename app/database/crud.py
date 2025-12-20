@@ -19,7 +19,7 @@ async def get_or_create_user(
     username: Optional[str] = None,
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
-    free_photoshoots_count: int = 2,
+    free_photoshoots_count: Optional[int] = None,  # Changed to Optional, will use settings if None
     utm_source: Optional[str] = None,
     utm_medium: Optional[str] = None,
     utm_campaign: Optional[str] = None,
@@ -27,6 +27,13 @@ async def get_or_create_user(
     utm_term: Optional[str] = None
 ) -> User:
     """Get existing user or create new one"""
+    # Import settings here to avoid circular import
+    from app.config import settings
+
+    # Use settings value if not provided
+    if free_photoshoots_count is None:
+        free_photoshoots_count = settings.FREE_PHOTOSHOOTS_COUNT
+
     result = await session.execute(
         select(User).where(User.telegram_id == telegram_id)
     )
