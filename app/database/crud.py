@@ -448,12 +448,13 @@ async def get_orders_count(session: AsyncSession, status: Optional[str] = None) 
 # ==================== PROCESSED IMAGE ====================
 
 async def create_processed_image(
-    session: AsyncSession, 
-    user_id: int, 
-    telegram_file_id: Optional[str], 
+    session: AsyncSession,
+    user_id: int,
+    telegram_file_id: Optional[str],
     style_name: str,
     prompt_used: str,
-    aspect_ratio: str
+    aspect_ratio: str,
+    is_free: bool = False
 ) -> ProcessedImage:
     """Create processed image record"""
     image = ProcessedImage(
@@ -462,7 +463,7 @@ async def create_processed_image(
         style_name=style_name,
         prompt_used=prompt_used,
         aspect_ratio=aspect_ratio,
-        is_free=False # Assuming all are "paid" with credits
+        is_free=is_free
     )
     session.add(image)
     await session.commit()
