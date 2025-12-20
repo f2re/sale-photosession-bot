@@ -642,6 +642,20 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
         # Deduct balance only if generation was successful
         await update_user_images_count(session, user.id, -1)
 
+        # Determine if this generation is free
+        # Check if user has any paid orders - if not, these are free photoshoots
+        from sqlalchemy import select, func
+        from app.database.models import Order
+        paid_orders_count = (await session.execute(
+            select(func.count(Order.id)).where(
+                Order.user_id == user.id,
+                Order.status == "paid"
+            )
+        )).scalar() or 0
+
+        # If user has no paid orders and total_images_processed < FREE_PHOTOSHOOTS_COUNT, it's free
+        is_free_generation = (paid_orders_count == 0 and user.total_images_processed < settings.FREE_PHOTOSHOOTS_COUNT)
+
         # Track "first_image" event for UTM users on their first generation
         if user.total_images_processed == 0 and (user.utm_source or user.utm_medium or user.utm_campaign):
             await metrika_service.track_event(
@@ -670,7 +684,7 @@ async def confirm_gen(callback: CallbackQuery, state: FSMContext, session: Async
                         filename=f"photoshoot_{i}_{img['style_name']}.png"
                     )
                     media.append(InputMediaPhoto(media=input_file))
-                    await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], data["aspect_ratio"])
+                    await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], data["aspect_ratio"], is_free=is_free_generation)
                     style_names.append(img['style_name'])
                     successful_count += 1
                 except Exception as e:
@@ -1452,6 +1466,17 @@ async def batch_style_process_photos(message: Message, state: FSMContext, sessio
             user.images_remaining -= 1
             await session.commit()
 
+            # Determine if this generation is free
+            from app.database.models import Order
+            paid_orders_count = (await session.execute(
+                select(func.count(Order.id)).where(
+                    Order.user_id == user.id,
+                    Order.status == "paid"
+                )
+            )).scalar() or 0
+
+            is_free_generation = (paid_orders_count == 0 and user.total_images_processed < settings.FREE_PHOTOSHOOTS_COUNT)
+
             # Send results
             media = []
             successful_count = 0
@@ -1465,7 +1490,7 @@ async def batch_style_process_photos(message: Message, state: FSMContext, sessio
                             filename=f"batch_{idx}_{i}_{img['style_name']}.png"
                         )
                         media.append(InputMediaPhoto(media=input_file))
-                        await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], batch_aspect_ratio)
+                        await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], batch_aspect_ratio, is_free=is_free_generation)
                         style_names.append(img['style_name'])
                         successful_count += 1
                     except Exception as e:
