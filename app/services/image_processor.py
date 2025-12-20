@@ -66,7 +66,7 @@ class ImageProcessor:
             headers = {
                 "Authorization": f"Bearer {self.openrouter_api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "SalePhotosession_bot",
+                "HTTP-Referer": "shttps://sale-photo.app-studio.online/",
                 "X-Title": "Product Photoshoot Bot"
             }
 

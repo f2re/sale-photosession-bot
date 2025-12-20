@@ -57,7 +57,7 @@ class ProductDetector:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "SalePhotosession_bot",
+                "HTTP-Referer": "https://sale-photo.app-studio.online/",
                 "X-Title": "Product Photoshoot Bot"
             }
 
