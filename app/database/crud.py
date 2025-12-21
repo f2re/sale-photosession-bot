@@ -20,6 +20,7 @@ async def get_or_create_user(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
     free_photoshoots_count: Optional[int] = None,  # Changed to Optional, will use settings if None
+    language_code: Optional[str] = None,  # Telegram language code
     utm_source: Optional[str] = None,
     utm_medium: Optional[str] = None,
     utm_campaign: Optional[str] = None,
@@ -40,7 +41,11 @@ async def get_or_create_user(
     user = result.scalar_one_or_none()
 
     if not user:
+        from app.i18n import get_user_language
         metrika_client_id = str(uuid.uuid4())
+
+        # Determine user language
+        user_lang = get_user_language(language_code) if language_code else "en"
 
         user = User(
             telegram_id=telegram_id,
@@ -48,6 +53,7 @@ async def get_or_create_user(
             first_name=first_name,
             last_name=last_name,
             images_remaining=free_photoshoots_count,
+            language=user_lang,
             utm_source=utm_source,
             utm_medium=utm_medium,
             utm_campaign=utm_campaign,
@@ -76,6 +82,17 @@ async def get_or_create_user(
         await session.refresh(user)
 
     return user
+
+
+async def get_user_by_telegram_id(
+    session: AsyncSession,
+    telegram_id: int
+) -> Optional[User]:
+    """Get user by telegram ID without creating if not exists"""
+    result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_user_balance(session: AsyncSession, telegram_id: int) -> dict:

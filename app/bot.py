@@ -10,9 +10,11 @@ from alembic import command
 
 from app.config import settings
 from app.database import init_db
-from app.handlers import user, admin, payment, support, batch_processing, style_management, custom_styles
+from app.handlers import user, admin, payment, support, batch_processing, style_management, custom_styles, legal
 from app.services.yandex_metrika import periodic_metrika_upload
 from app.middlewares import DbSessionMiddleware
+from app.i18n.middleware import I18nMiddleware
+from app.legal.middleware import ConsentMiddleware
 
 # Setup logging
 def setup_logging():
@@ -93,13 +95,24 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
-    # Register middleware
+    # Register middlewares (order matters!)
+    # 1. Database session
     dp.update.middleware(DbSessionMiddleware())
 
+    # 2. I18n (needs database session)
+    dp.message.middleware(I18nMiddleware())
+    dp.callback_query.middleware(I18nMiddleware())
+
+    # 3. Consent check (needs i18n)
+    dp.message.middleware(ConsentMiddleware())
+    dp.callback_query.middleware(ConsentMiddleware())
+
     # Register routers
-    # IMPORTANT: batch_processing must be registered BEFORE user router
+    # IMPORTANT: legal router must be first to handle consent screen
+    # batch_processing must be registered BEFORE user router
     # to handle media groups (albums) before single images
     # custom_styles should be before user to handle custom style callbacks first
+    dp.include_router(legal.router)
     dp.include_router(batch_processing.router)
     dp.include_router(style_management.router)
     dp.include_router(custom_styles.router)
