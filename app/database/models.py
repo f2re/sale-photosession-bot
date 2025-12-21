@@ -17,14 +17,45 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
+
     # Balance in PHOTOSHOOTS (not single images)
     # 1 photoshoot = 4 images
     images_remaining: Mapped[int] = mapped_column(Integer, default=2)  # Default from config
     total_images_processed: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # i18n - user language
+    language: Mapped[str] = mapped_column(
+        String(5),
+        nullable=False,
+        default="en",
+        server_default="en",
+        index=True
+    )
+
+    # Legal consent fields
+    consent_privacy_policy: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default='false'
+    )
+    consent_terms_of_service: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default='false'
+    )
+    consent_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True
+    )
+    consent_ip: Mapped[Optional[str]] = mapped_column(
+        String(45),  # IPv6 support
+        nullable=True
+    )
 
     # UTM tracking fields
     utm_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
@@ -52,6 +83,13 @@ class User(Base):
     referrer: Mapped[Optional["User"]] = relationship("User", remote_side=[id], foreign_keys=[referred_by_id], back_populates="referrals")
     referrals: Mapped[List["User"]] = relationship("User", foreign_keys=[referred_by_id], back_populates="referrer", cascade="all, delete-orphan")
     referral_rewards: Mapped[List["ReferralReward"]] = relationship("ReferralReward", foreign_keys="[ReferralReward.user_id]", back_populates="user", cascade="all, delete-orphan")
+
+    def has_accepted_terms(self) -> bool:
+        """Check if user has accepted all terms"""
+        return (
+            self.consent_privacy_policy and
+            self.consent_terms_of_service
+        )
 
     def __repr__(self):
         return f"<User(id={self.id}, telegram_id={self.telegram_id}, username={self.username})>"
