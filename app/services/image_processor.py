@@ -271,23 +271,69 @@ Your description:"""
     async def _generate_single_variant(self, img_bytes, prompt, style_name, ratio):
         """
         Generate single image variant using NanoBanana API.
-        
+
         Args:
             img_bytes: Product image bytes
             prompt: Style prompt
             style_name: Style name for logging
             ratio: Aspect ratio
-            
+
         Returns:
             Result dict with success, image_bytes, and error fields
         """
         try:
             logger.info(f"Generating '{style_name}' with ratio {ratio}")
             return await self.nanobanana.generate_image(
-                prompt=prompt, 
-                reference_image_bytes=img_bytes, 
+                prompt=prompt,
+                reference_image_bytes=img_bytes,
                 aspect_ratio=ratio
             )
         except Exception as e:
             logger.error(f"Failed to generate '{style_name}': {e}", exc_info=True)
             return {"success": False, "error": str(e)}
+
+    async def process_image(
+        self,
+        image_bytes: bytes,
+        bot: Bot,
+        user: User,
+        use_transparent_bg: bool = False
+    ) -> Dict:
+        """
+        DEPRECATED: Legacy method for batch processing compatibility.
+
+        This method is a temporary stub to maintain compatibility with
+        batch_processing.py. Currently returns the original image unchanged.
+
+        TODO: Either remove batch_processing.py or integrate it with
+        generate_photoshoot() for proper style-based generation.
+
+        Args:
+            image_bytes: Original image bytes
+            bot: Bot instance (unused)
+            user: User object (unused)
+            use_transparent_bg: Whether to use transparent background (unused)
+
+        Returns:
+            Dict with success, image_bytes, and error fields
+        """
+        logger.warning(
+            "DEPRECATED: process_image() called. "
+            "Batch processing needs to be updated to use generate_photoshoot()"
+        )
+
+        try:
+            # For now, just return the original image
+            # This prevents crashes but doesn't actually process anything
+            return {
+                "success": True,
+                "image_bytes": image_bytes,
+                "error": None
+            }
+        except Exception as e:
+            logger.error(f"Error in process_image stub: {e}", exc_info=True)
+            return {
+                "success": False,
+                "image_bytes": None,
+                "error": str(e)
+            }
