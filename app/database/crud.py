@@ -456,7 +456,29 @@ async def create_processed_image(
     aspect_ratio: str,
     is_free: bool = False
 ) -> ProcessedImage:
-    """Create processed image record"""
+    """
+    Create processed image record
+    
+    Args:
+        user_id: Database user ID (users.id, NOT telegram_id)
+        telegram_file_id: Telegram file ID of the processed image
+        style_name: Name of the style used
+        prompt_used: Prompt used for generation
+        aspect_ratio: Aspect ratio of the image
+        is_free: Whether this was a free image
+        
+    Raises:
+        ValueError: If user with given ID doesn't exist in database
+    """
+    # Validate that user exists with this database ID
+    result = await session.execute(
+        select(User.id).where(User.id == user_id)
+    )
+    if not result.scalar_one_or_none():
+        logger.error(f"Cannot create processed image: user not found with database id={user_id}. "
+                    f"Possible cause: telegram_id was passed instead of database user.id")
+        raise ValueError(f"User with database id={user_id} not found. This must be the internal database ID, not telegram_id.")
+    
     image = ProcessedImage(
         user_id=user_id,
         telegram_file_id=telegram_file_id,
@@ -467,14 +489,49 @@ async def create_processed_image(
     )
     session.add(image)
     await session.commit()
+    logger.info(f"Created processed image for user_id={user_id}, style={style_name}")
     return image
 
 
-async def save_processed_image(session: AsyncSession, user_id: int, telegram_file_id: str, 
-                               original_file_id: str, prompt_used: str, is_free: bool = False):
-    """Legacy method wrapper"""
-    # Adapted for compatibility if needed, but prefer create_processed_image
-    await create_processed_image(session, user_id, telegram_file_id, "Legacy", prompt_used, "1:1")
+async def save_processed_image(
+    session: AsyncSession,
+    user_id: int,
+    telegram_file_id: str,
+    original_file_id: str,
+    prompt_used: str,
+    is_free: bool = False
+):
+    """
+    Legacy method wrapper - ensures user_id is the database ID
+    
+    Args:
+        user_id: Database user ID (users.id, NOT telegram_id)
+        telegram_file_id: Telegram file ID of the processed image
+        original_file_id: Original file ID (legacy parameter)
+        prompt_used: Prompt used for generation
+        is_free: Whether this was a free image
+        
+    Raises:
+        ValueError: If user with given ID doesn't exist in database
+    """
+    # Validate that user exists with this database ID before proceeding
+    result = await session.execute(
+        select(User.id).where(User.id == user_id)
+    )
+    if not result.scalar_one_or_none():
+        logger.error(f"Cannot save processed image: user not found with database id={user_id}. "
+                    f"Possible cause: telegram_id was passed instead of database user.id")
+        raise ValueError(f"User with database id={user_id} not found. This must be the internal database ID, not telegram_id.")
+    
+    await create_processed_image(
+        session,
+        user_id,
+        telegram_file_id,
+        "Legacy",
+        prompt_used,
+        "1:1",
+        is_free
+    )
 
 
 # ==================== SUPPORT ====================
