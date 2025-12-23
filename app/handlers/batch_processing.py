@@ -72,7 +72,7 @@ async def process_media_group_after_timeout(media_group_id: str, user_id: int, b
 
     Args:
         media_group_id: ID of media group
-        user_id: User ID
+        user_id: User ID (telegram_id)
         bot: Bot instance
         state_data_storage: Shared storage dict to pass data between handlers
     """
@@ -350,13 +350,13 @@ async def batch_cancel_handler(callback: CallbackQuery, state: FSMContext):
     batch_data_storage.pop(callback.from_user.id, None)
 
 
-async def process_batch_images(message: Message, user_id: int, images: List[Dict], total_images: int):
+async def process_batch_images(message: Message, telegram_id: int, images: List[Dict], total_images: int):
     """
     Process batch of images one by one with delays
 
     Args:
         message: Message to send updates to
-        user_id: User ID
+        telegram_id: User's Telegram ID
         images: List of image dicts with file_id, file_unique_id, is_document
         total_images: Total number of images in original batch (for reporting)
     """
@@ -366,15 +366,17 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
     processed_count = 0
     failed_count = 0
 
-    # Get full user object once before the loop
+    # Get or create user and store database ID early
     async with db.get_session() as session:
-        user = await get_or_create_user(session, user_id)
+        user = await get_or_create_user(session, telegram_id)
+        db_user_id = user.id  # Store the database user ID (not telegram_id)
+        logger.info(f"Processing batch for user: telegram_id={telegram_id}, db_user_id={db_user_id}")
 
     for idx, img_data in enumerate(images, 1):
         try:
             # Get current balance
             async with db.get_session() as session:
-                balance = await get_user_balance(session, user_id)
+                balance = await get_user_balance(session, telegram_id)
 
             if balance['total'] == 0:
                 # No more images available
@@ -390,7 +392,7 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
 
             # Reserve balance
             async with db.get_session() as session:
-                success, is_free_image = await check_and_reserve_balance(session, user_id)
+                success, is_free_image = await check_and_reserve_balance(session, telegram_id)
 
                 if not success:
                     await message.answer(
@@ -422,23 +424,24 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
                     filename=f"batch_{idx}_{img_data['file_unique_id']}.png"
                 )
 
-                # Save processing record
+                # Save processing record using correct database user ID
                 async with db.get_session() as session:
                     # Update stats and check if this is first image
-                    is_first_image_processed, db_user_id = await update_user_stats(session, user_id)
+                    is_first_image_processed, _ = await update_user_stats(session, telegram_id)
 
                     # Track first_image event to Metrika if this is the first generation
                     if is_first_image_processed:
                         await metrika_service.track_event(
                             session=session,
-                            user_id=db_user_id,
+                            user_id=db_user_id,  # Use database user ID
                             event_type="first_image"
                         )
-                        logger.info(f"First image processed for user {user_id}")
+                        logger.info(f"First image processed for user {telegram_id}")
 
+                    # Save processed image with correct database user ID
                     await save_processed_image(
                         session,
-                        user_id,
+                        db_user_id,  # FIXED: Use database user ID instead of telegram_id
                         img_data["file_id"],
                         "batch_processed",
                         "Batch processing",
@@ -446,7 +449,7 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
                     )
 
                     # Get updated balance
-                    new_balance = await get_user_balance(session, user_id)
+                    new_balance = await get_user_balance(session, telegram_id)
 
                 remaining = len(images) - idx
                 caption = (
@@ -473,7 +476,7 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
             else:
                 # Processing failed - rollback balance
                 async with db.get_session() as session:
-                    await rollback_balance(session, user_id, is_free_image)
+                    await rollback_balance(session, telegram_id, is_free_image)
 
                 failed_count += 1
                 logger.error(f"Failed to process image {idx}/{len(images)}: {result['error']}")
@@ -489,7 +492,7 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
             try:
                 if 'is_free_image' in locals():
                     async with db.get_session() as session:
-                        await rollback_balance(session, user_id, is_free_image)
+                        await rollback_balance(session, telegram_id, is_free_image)
             except:
                 pass
 
@@ -504,7 +507,7 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
 
     # Get final balance
     async with db.get_session() as session:
-        final_balance = await get_user_balance(session, user_id)
+        final_balance = await get_user_balance(session, telegram_id)
 
     summary_text += f"\n💎 Осталось обработок: <b>{final_balance['total']}</b>"
 
@@ -516,4 +519,3 @@ async def process_batch_images(message: Message, user_id: int, images: List[Dict
         await message.answer(summary_text, parse_mode="HTML")
     else:
         await message.answer(summary_text, parse_mode="HTML")
-
