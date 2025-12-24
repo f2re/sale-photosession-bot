@@ -140,6 +140,7 @@ def get_initial_photo_keyboard(aspect_ratio: str = "1:1") -> InlineKeyboardMarku
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Да, создать 4 варианта", callback_data="confirm_auto_generation")
     builder.button(text="📐 Изменить пропорции", callback_data="change_aspect_ratio")
+    builder.button(text="❌ Отмена", callback_data="cancel_action")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -214,6 +215,7 @@ def get_favorite_style_keyboard(styles: List[Dict]) -> InlineKeyboardMarkup:
         )
 
     builder.button(text="────────────────", callback_data="separator_ignore")
+    builder.button(text="◀️ Назад к результатам", callback_data="back_to_results")
     builder.button(text="🔄 Новое фото товара", callback_data="new_photoshoot")
     builder.button(text="🎨 Создать другие стили", callback_data="styles:random")
     builder.button(text="💾 Сохранить стиль", callback_data="save_style")
