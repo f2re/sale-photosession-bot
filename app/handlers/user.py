@@ -615,10 +615,16 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
     if "product_type" in res:
         product_info = f"📦 {res['product_name']} ({res['product_type']})"
 
-    text = _format_styles_preview(res["styles"])
+    # Format styles preview for new UX
+    styles_text = "\n\n".join([
+        f"{i+1}. <b>{style['style_name']}</b>"
+        for i, style in enumerate(res["styles"])
+    ])
+
     await msg.edit_text(
-        f"🎲 <b>Случайные стили:</b>\n{product_info}\n\n{text}",
-        reply_markup=get_style_preview_keyboard(True, res["product_name"]), parse_mode="HTML"
+        f"🎲 <b>Случайные стили:</b>\n{product_info}\n\n{styles_text}\n\nВыберите, что сделать дальше:",
+        reply_markup=get_style_choice_keyboard(res["styles"], res["product_name"]),
+        parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
@@ -1326,6 +1332,44 @@ async def check_balance_callback(callback: CallbackQuery, session: AsyncSession)
 
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_buy_packages_keyboard())
     await callback.answer()
+
+@router.callback_query(F.data == "back_to_results")
+async def back_to_results(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Go back to post-generation results after viewing favorite styles picker"""
+    await callback.answer()
+
+    data = await state.get_data()
+    user = await get_or_create_user(session, callback.from_user.id)
+
+    generation_type = data.get("generation_type", "mixed")
+    is_single_style = (generation_type == "single")
+
+    # Recreate the summary message
+    summary = "✅ <b>Готово! Вот ваши фото</b>\n\n"
+    summary += f"📊 <b>Что было сделано:</b>\n"
+    summary += f"├─ Товар: {data.get('product_name', 'Товар')}\n"
+    summary += f"├─ Формат: {data.get('aspect_ratio', '1:1')}\n"
+
+    styles = data.get("styles", [])
+    if is_single_style:
+        summary += f"├─ Стиль: {styles[0]['style_name'] if styles else 'Unknown'} (4 вариации)\n"
+    else:
+        style_names = ", ".join([s['style_name'] for s in styles])
+        summary += f"├─ Стили: {style_names}\n"
+
+    summary += f"└─ Потрачено: 1 генерация\n\n"
+    summary += f"💎 Осталось генераций: <b>{user.images_remaining}</b>\n\n"
+    summary += f"Что делать дальше?"
+
+    await callback.message.edit_text(
+        summary,
+        reply_markup=get_post_result_keyboard(
+            has_balance=user.images_remaining > 0,
+            can_continue_style=is_single_style,
+            balance=user.images_remaining
+        ),
+        parse_mode="HTML"
+    )
 
 
 async def handle_generation_result(
