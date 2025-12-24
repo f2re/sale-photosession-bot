@@ -548,6 +548,182 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
             logger.error(f"Error generating styles: {e}", exc_info=True)
             return self._fallback_response(product_description, aspect_ratio)
 
+    async def generate_styles_from_product_info(
+        self,
+        product_name: str,
+        product_description: str,
+        aspect_ratio: str = "1:1",
+        random: bool = False,
+        num_styles: int = 4
+    ) -> Dict:
+        """
+        Generate styles from already-detected product information (Stage 2 - expensive Claude call)
+
+        Args:
+            product_name: Detected product name
+            product_description: Full product description
+            aspect_ratio: Aspect ratio (1:1, 3:4, etc.)
+            random: If True, generates random creative styles
+            num_styles: Number of styles to generate (1-4)
+
+        Returns:
+            {
+                "success": bool,
+                "product_name": str,
+                "styles": [
+                    {"style_name": "...", "prompt": "..."},
+                    ...
+                ],
+                "error": Optional[str]
+            }
+        """
+        logger.info(f"Generating {num_styles} styles for: {product_name}")
+
+        # Generate styles using Claude Sonnet (expensive!)
+        styles_result = await self.generate_styles_from_description(
+            product_description=product_description,
+            aspect_ratio=aspect_ratio,
+            random=random,
+            num_styles=num_styles
+        )
+
+        return styles_result
+
+    async def generate_style_variations(
+        self,
+        base_style: Dict,
+        product_name: str,
+        product_description: str,
+        aspect_ratio: str = "1:1",
+        num_variations: int = 4
+    ) -> Dict:
+        """
+        Generate variations of a specific style (expensive Claude Sonnet call)
+
+        Args:
+            base_style: Base style dict with style_name and prompt
+            product_name: Product name
+            product_description: Product description
+            aspect_ratio: Aspect ratio
+            num_variations: Number of variations to generate (default 4)
+
+        Returns:
+            {
+                "success": bool,
+                "product_name": str,
+                "styles": [variations of the base style],
+                "error": Optional[str]
+            }
+        """
+        try:
+            logger.info(f"Generating {num_variations} variations of style: {base_style.get('style_name')}")
+
+            user_prompt = f"""Product: {product_description}
+Aspect Ratio: {aspect_ratio}
+
+ORIGINAL STYLE:
+Name: {base_style.get('style_name')}
+Prompt: {base_style.get('prompt')}
+
+Generate {num_variations} VARIATIONS of this style. Keep the core concept and mood, but vary:
+- Camera angles and distances
+- Lighting variations (same mood, different execution)
+- Subtle changes in composition
+- Minor prop/element variations
+
+All variations must maintain the original style's essence and atmosphere!
+
+Return result STRICTLY in JSON format with exactly {num_variations} style variations."""
+
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://sale-photo.app-studio.online/",
+                "X-Title": "Product Photoshoot Bot"
+            }
+
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": self.SYSTEM_PROMPT
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    }
+                ],
+                "temperature": 0.8,  # Slightly higher for variations
+                "max_tokens": 2000,
+                "response_format": {"type": "json_object"}
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.base_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=60)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        content = result['choices'][0]['message']['content']
+
+                        try:
+                            clean_json = self._extract_json_from_response(content)
+                            data = json.loads(clean_json)
+
+                            if not self._validate_response(data, num_variations):
+                                logger.warning(f"Invalid JSON structure for variations")
+                                # Fallback: use base style duplicated
+                                return {
+                                    "success": True,
+                                    "product_name": product_name,
+                                    "styles": [base_style] * num_variations,
+                                    "error": None
+                                }
+
+                            logger.info(f"Successfully generated {len(data['styles'])} style variations")
+
+                            return {
+                                "success": True,
+                                "product_name": data.get("product_name", product_name),
+                                "styles": data["styles"][:num_variations],
+                                "error": None
+                            }
+
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse variation JSON: {e}")
+                            # Fallback: use base style duplicated
+                            return {
+                                "success": True,
+                                "product_name": product_name,
+                                "styles": [base_style] * num_variations,
+                                "error": None
+                            }
+
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"API error for variations: {response.status} - {error_text}")
+                        # Fallback: use base style duplicated
+                        return {
+                            "success": True,
+                            "product_name": product_name,
+                            "styles": [base_style] * num_variations,
+                            "error": None
+                        }
+
+        except Exception as e:
+            logger.error(f"Error generating style variations: {e}", exc_info=True)
+            # Fallback: use base style duplicated
+            return {
+                "success": True,
+                "product_name": product_name,
+                "styles": [base_style] * num_variations,
+                "error": None
+            }
+
     async def generate_styles_with_vision(
         self,
         product_image_bytes: bytes,
@@ -557,6 +733,10 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
     ) -> Dict:
         """
         Analyze product image using vision AI, then generate styles
+
+        DEPRECATED: Use two-stage flow instead:
+        1. Call product_detector.detect_product() first
+        2. Then call generate_styles_from_product_info() when user confirms
 
         Args:
             product_image_bytes: Product image bytes

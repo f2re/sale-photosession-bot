@@ -144,10 +144,15 @@ def get_initial_photo_keyboard(aspect_ratio: str = "1:1") -> InlineKeyboardMarku
     builder.adjust(1)
     return builder.as_markup()
 
-def get_style_choice_keyboard(styles: List[Dict], product_name: str = "") -> InlineKeyboardMarkup:
+def get_style_choice_keyboard(styles: List[Dict], product_name: str = "", remaining_attempts: int = 4) -> InlineKeyboardMarkup:
     """
     Keyboard for choosing which styles to generate after seeing style previews
     Optimized: style names on buttons, grouped layout
+
+    Args:
+        styles: List of style dictionaries
+        product_name: Product name (optional)
+        remaining_attempts: Remaining style generation attempts (default 4)
     """
     builder = InlineKeyboardBuilder()
 
@@ -166,12 +171,21 @@ def get_style_choice_keyboard(styles: List[Dict], product_name: str = "") -> Inl
     builder.button(text="🎨 По одному каждого", callback_data="generate_mixed_styles")
 
     # Additional options
-    builder.button(text="🔄 Другие стили", callback_data="styles:random")
-    builder.button(text="📐 Пропорции", callback_data="change_aspect_ratio")
-    builder.button(text="❌ Отмена", callback_data="cancel_action")
+    # Only show "Другие стили" if attempts remaining
+    if remaining_attempts > 0:
+        button_text = f"🔄 Другие стили ({remaining_attempts})" if remaining_attempts < 4 else "🔄 Другие стили"
+        builder.button(text=button_text, callback_data="styles:random")
+        builder.button(text="📐 Пропорции", callback_data="change_aspect_ratio")
+        builder.button(text="❌ Отмена", callback_data="cancel_action")
+        # Grouped layout: 2-2-1-2-1
+        builder.adjust(2, 2, 1, 2, 1)
+    else:
+        # No attempts left - don't show "Другие стили"
+        builder.button(text="📐 Пропорции", callback_data="change_aspect_ratio")
+        builder.button(text="❌ Отмена", callback_data="cancel_action")
+        # Grouped layout: 2-2-1-2
+        builder.adjust(2, 2, 1, 2)
 
-    # Grouped layout: 2-2-1-2-1
-    builder.adjust(2, 2, 1, 2, 1)
     return builder.as_markup()
 
 def get_post_result_keyboard(has_balance: bool, can_continue_style: bool = False, balance: int = 0) -> InlineKeyboardMarkup:

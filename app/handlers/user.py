@@ -412,31 +412,70 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
         photo_bytes = await bot.download_file(file.file_path)
         photo_data = photo_bytes.read()
 
-        # Store photo data - NO GENERATION YET!
-        default_aspect_ratio = "1:1"
-        await state.update_data(
-            product_image_bytes=photo_data,
-            product_image_file_id=file_id,
-            aspect_ratio=default_aspect_ratio
-        )
+        # Stage 1: Product Detection (Gemini Flash - CHEAP)
+        await msg.edit_text("🔍 Анализирую товар...")
 
-        # Simple confirmation - generation happens AFTER user confirms
-        result_text = (
-            f"✅ Фото получено!\n"
-            f"📐 Пропорции: <b>{default_aspect_ratio}</b> (квадрат для Instagram)\n\n"
-            f"💎 У вас: <b>{user.images_remaining}</b> генераций"
-        )
+        detection_result = await prompt_generator.product_detector.detect_product(photo_data)
+
+        if detection_result["success"]:
+            product_name = detection_result["product_name"]
+            product_type = detection_result["product_type"]
+            description = detection_result["description"]
+            recommended_ratio = detection_result.get("recommended_aspect_ratio", "1:1")
+
+            # Store all detected info
+            await state.update_data(
+                product_image_bytes=photo_data,
+                product_image_file_id=file_id,
+                product_name=product_name,
+                product_type=product_type,
+                product_description=f"{product_name}. {description}",
+                aspect_ratio=recommended_ratio,
+                style_generation_attempts=0  # Initialize counter
+            )
+
+            ratio_names = {
+                "1:1": "квадрат для Instagram",
+                "9:16": "вертикально для Stories",
+                "16:9": "горизонтально для сайта",
+                "4:5": "вертикально для карточки"
+            }
+
+            result_text = (
+                f"✅ <b>Распознано:</b> {product_name}\n"
+                f"📦 <b>Тип:</b> {product_type}\n"
+                f"📐 <b>Рекомендую:</b> {recommended_ratio} ({ratio_names.get(recommended_ratio, 'стандарт')})\n\n"
+                f"💎 <b>У вас:</b> {user.images_remaining} генераций"
+            )
+        else:
+            # Fallback if detection fails
+            logger.warning(f"Product detection failed: {detection_result.get('error')}")
+            await state.update_data(
+                product_image_bytes=photo_data,
+                product_image_file_id=file_id,
+                product_name="Товар",
+                product_type="Премиум товар",
+                product_description="Высококачественный коммерческий продукт",
+                aspect_ratio="1:1",
+                style_generation_attempts=0
+            )
+
+            result_text = (
+                f"✅ Фото получено!\n"
+                f"📐 Пропорции: <b>1:1</b> (квадрат для Instagram)\n\n"
+                f"💎 У вас: <b>{user.images_remaining}</b> генераций"
+            )
 
         await msg.edit_text(
             result_text,
-            reply_markup=get_initial_photo_keyboard(default_aspect_ratio),
+            reply_markup=get_initial_photo_keyboard(detection_result.get("recommended_aspect_ratio", "1:1") if detection_result["success"] else "1:1"),
             parse_mode="HTML"
         )
         await state.set_state(PhotoshootStates.waiting_for_confirmation)
 
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await msg.edit_text("❌ Ошибка загрузки. Попробуйте снова.")
+        logger.error(f"Error in product detection: {e}", exc_info=True)
+        await msg.edit_text("❌ Ошибка анализа. Попробуйте снова.")
 
 @router.callback_query(F.data.startswith("aspect_ratio:"))
 async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -541,32 +580,55 @@ async def analyze_styles(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "styles:random")
 async def random_styles(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    msg = await callback.message.edit_text("🎲 Генерирую случайные стили с AI-анализом...")
     data = await state.get_data()
 
-    # Get product image bytes from state
-    product_image_bytes = data.get("product_image_bytes")
-    if not product_image_bytes:
-        await msg.edit_text("❌ Изображение товара не найдено.", reply_markup=get_style_selection_keyboard())
+    # Check counter limit (max 4 attempts)
+    current_attempts = data.get("style_generation_attempts", 0)
+    MAX_ATTEMPTS = 4
+
+    if current_attempts >= MAX_ATTEMPTS:
+        await callback.answer(
+            f"❌ Достигнут лимит генераций стилей ({MAX_ATTEMPTS}). Загрузите новое фото для продолжения.",
+            show_alert=True
+        )
         return
 
-    # Use vision-based product detection with random styles
-    res = await prompt_generator.generate_styles_with_vision(
-        product_image_bytes=product_image_bytes,
-        aspect_ratio=data["aspect_ratio"],
-        random=True
+    # Get already-detected product info
+    product_name = data.get("product_name", "Товар")
+    product_description = data.get("product_description", "Коммерческий продукт")
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+
+    if not product_name or not product_description:
+        await callback.message.edit_text("❌ Информация о товаре не найдена. Начните сначала.")
+        return
+
+    msg = await callback.message.edit_text("🎲 Генерирую случайные стили...")
+
+    # Generate random styles using Claude Sonnet (expensive!)
+    res = await prompt_generator.generate_styles_from_product_info(
+        product_name=product_name,
+        product_description=product_description,
+        aspect_ratio=aspect_ratio,
+        random=True,
+        num_styles=4
     )
 
     if not res["success"]:
-        await msg.edit_text("❌ Ошибка.", reply_markup=get_style_selection_keyboard())
+        await msg.edit_text("❌ Ошибка генерации стилей.", reply_markup=get_style_selection_keyboard())
         return
 
-    await state.update_data(product_name=res["product_name"], styles=res["styles"])
+    # Increment counter
+    new_attempts = current_attempts + 1
+    await state.update_data(
+        styles=res["styles"],
+        style_generation_attempts=new_attempts
+    )
 
-    # Show detected product info if available
-    product_info = f"📦 {res['product_name']}"
-    if "product_type" in res:
-        product_info = f"📦 {res['product_name']} ({res['product_type']})"
+    # Show detected product info
+    product_type = data.get("product_type", "")
+    product_info = f"📦 {product_name}"
+    if product_type:
+        product_info = f"📦 {product_name} ({product_type})"
 
     # Format styles preview for new UX
     styles_text = "\n\n".join([
@@ -574,9 +636,12 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
         for i, style in enumerate(res["styles"])
     ])
 
+    # Show remaining attempts
+    remaining = MAX_ATTEMPTS - new_attempts
+
     await msg.edit_text(
         f"🎲 <b>Случайные стили:</b>\n{product_info}\n\n{styles_text}\n\nВыберите, что сделать дальше:",
-        reply_markup=get_style_choice_keyboard(res["styles"], res["product_name"]),
+        reply_markup=get_style_choice_keyboard(res["styles"], product_name, remaining),
         parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
@@ -1047,38 +1112,47 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
 async def confirm_auto_generation(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """
     User confirmed to create 4 variants
-    NOW we generate styles with AI analysis
+    Stage 2: Generate styles with Claude Sonnet (EXPENSIVE!)
     """
     await callback.answer()
     data = await state.get_data()
 
-    # Check if we have photo
-    product_image_bytes = data.get("product_image_bytes")
-    if not product_image_bytes:
-        await callback.message.edit_text("❌ Ошибка: фото не найдено. Начните сначала.")
+    # Get already-detected product info
+    product_name = data.get("product_name", "Товар")
+    product_description = data.get("product_description", "Коммерческий продукт")
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+
+    if not product_name or not product_description:
+        await callback.message.edit_text("❌ Ошибка: информация о товаре не найдена. Начните сначала.")
         await state.clear()
         return
 
     user = await get_or_create_user(session, callback.from_user.id)
-    aspect_ratio = data.get("aspect_ratio", "1:1")
 
-    # NOW generate styles (only after user confirmed!)
-    await callback.message.edit_text("🔍 Анализирую товар и создаю стили...")
+    # Stage 2: Generate styles using Claude Sonnet (expensive!)
+    await callback.message.edit_text("✨ Создаю профессиональные стили...")
 
-    res = await prompt_generator.generate_styles_with_vision(
-        product_image_bytes=product_image_bytes,
+    res = await prompt_generator.generate_styles_from_product_info(
+        product_name=product_name,
+        product_description=product_description,
         aspect_ratio=aspect_ratio,
-        random=False
+        random=False,
+        num_styles=4
     )
 
     if not res["success"]:
-        await callback.message.edit_text("❌ Ошибка анализа. Попробуйте снова.")
+        await callback.message.edit_text("❌ Ошибка создания стилей. Попробуйте снова.")
         return
 
-    # Store generated styles
+    # Increment style generation counter
+    MAX_ATTEMPTS = 4
+    current_attempts = data.get("style_generation_attempts", 0)
+    new_attempts = current_attempts + 1
+    remaining = MAX_ATTEMPTS - new_attempts
+
     await state.update_data(
-        product_name=res["product_name"],
-        styles=res["styles"]
+        styles=res["styles"],
+        style_generation_attempts=new_attempts
     )
 
     # Show style preview with choice
@@ -1098,7 +1172,7 @@ async def confirm_auto_generation(callback: CallbackQuery, state: FSMContext, se
 
     await callback.message.edit_text(
         preview_text,
-        reply_markup=get_style_choice_keyboard(res["styles"], res["product_name"]),
+        reply_markup=get_style_choice_keyboard(res["styles"], res["product_name"], remaining),
         parse_mode="HTML"
     )
     await state.set_state(PhotoshootStates.reviewing_suggested_styles)
@@ -1137,7 +1211,7 @@ async def back_to_initial(callback: CallbackQuery, state: FSMContext, session: A
 @router.callback_query(F.data.startswith("generate_single_style:"))
 async def generate_single_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     """
-    Generate 4 variations of a single style
+    Generate 4 variations of a single style using Claude Sonnet
     """
     await callback.answer()
 
@@ -1159,13 +1233,32 @@ async def generate_single_style(callback: CallbackQuery, state: FSMContext, sess
         selected_style = styles[style_index]
         aspect_ratio = data.get("aspect_ratio", "1:1")
         product_name = data.get("product_name", "Товар")
+        product_description = data.get("product_description", "Коммерческий продукт")
 
-        # Create 4 variations of the same style
-        generation_styles = [selected_style] * 4
-
-        # Show generation status
+        # Step 1: Generate style variations using Claude Sonnet (expensive!)
         await callback.message.edit_text(
-            f"🎨 Создаю 4 вариации в стиле \"{selected_style['style_name']}\"\n\n"
+            f"✨ Создаю 4 вариации стиля \"{selected_style['style_name']}\"...\n\n"
+            f"⏳ Генерирую промпты...",
+            parse_mode="HTML"
+        )
+
+        variation_result = await prompt_generator.generate_style_variations(
+            base_style=selected_style,
+            product_name=product_name,
+            product_description=product_description,
+            aspect_ratio=aspect_ratio,
+            num_variations=4
+        )
+
+        if not variation_result["success"]:
+            logger.warning("Style variation generation failed, using base style duplicates")
+            generation_styles = [selected_style] * 4
+        else:
+            generation_styles = variation_result["styles"]
+
+        # Step 2: Generate images
+        await callback.message.edit_text(
+            f"🎨 Генерирую изображения в стиле \"{selected_style['style_name']}\"\n\n"
             f"📦 Товар: {product_name}\n"
             f"📐 Формат: {aspect_ratio}\n"
             f"🎭 Стиль: {selected_style['style_name']}\n\n"
@@ -1424,10 +1517,27 @@ async def handle_generation_result(
     except:
         pass
 
-    # Send media group
+    # Send media group (compressed preview)
     if media:
         try:
             await message.answer_media_group(media)
+
+            # Send individual files WITHOUT compression (full quality)
+            await message.answer("📁 <b>Файлы без потери качества:</b>", parse_mode="HTML")
+
+            for i, img in enumerate(res["images"]):
+                if img.get("success"):
+                    try:
+                        file_document = BufferedInputFile(
+                            img["image_bytes"],
+                            filename=f"photoshoot_{i+1}_{img['style_name']}.png"
+                        )
+                        await message.answer_document(
+                            document=file_document,
+                            caption=f"🎨 {img['style_name']}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Error sending file {i}: {e}", exc_info=True)
 
             # Refresh user balance
             await session.refresh(user)
