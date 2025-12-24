@@ -1333,12 +1333,72 @@ async def generate_mixed_styles(callback: CallbackQuery, state: FSMContext, sess
 @router.callback_query(F.data == "continue_same_style")
 async def continue_same_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     """Generate 4 more variations of the same style"""
-    data = await state.get_data()
-    style_index = data.get("last_generated_style_index", 0)
+    await callback.answer()
 
-    # Update callback data and reuse generate_single_style
-    callback.data = f"generate_single_style:{style_index}"
-    await generate_single_style(callback, state, session, bot)
+    try:
+        data = await state.get_data()
+        style_index = data.get("last_generated_style_index", 0)
+
+        user = await get_or_create_user(session, callback.from_user.id)
+
+        if user.images_remaining < 1:
+            await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
+            return
+
+        styles = data.get("styles", [])
+        if style_index >= len(styles):
+            await callback.message.edit_text("❌ Ошибка: стиль не найден")
+            return
+
+        selected_style = styles[style_index]
+        aspect_ratio = data.get("aspect_ratio", "1:1")
+        product_name = data.get("product_name", "Товар")
+        product_description = data.get("product_description", "Коммерческий продукт")
+
+        # Step 1: Generate style variations using Claude Sonnet (expensive!)
+        await callback.message.edit_text(
+            f"✨ Создаю ещё 4 вариации стиля \"{selected_style['style_name']}\"...\n\n"
+            f"⏳ Генерирую промпты...",
+            parse_mode="HTML"
+        )
+
+        variation_result = await prompt_generator.generate_style_variations(
+            base_style=selected_style,
+            product_name=product_name,
+            product_description=product_description,
+            aspect_ratio=aspect_ratio,
+            num_variations=4
+        )
+
+        if not variation_result["success"]:
+            logger.warning("Style variation generation failed, using base style duplicates")
+            generation_styles = [selected_style] * 4
+        else:
+            generation_styles = variation_result["styles"]
+
+        # Step 2: Generate images
+        await callback.message.edit_text(
+            f"🎨 Генерирую изображения в стиле \"{selected_style['style_name']}\"\n\n"
+            f"📦 Товар: {product_name}\n"
+            f"📐 Формат: {aspect_ratio}\n"
+            f"🎭 Стиль: {selected_style['style_name']}\n\n"
+            f"⏳ 40-60 секунд...",
+            parse_mode="HTML"
+        )
+
+        # Generate images
+        res = await image_processor.generate_photoshoot(
+            data["product_image_bytes"], generation_styles, aspect_ratio, bot, user, callback.message
+        )
+
+        await handle_generation_result(
+            res, callback.message, session, user, state, aspect_ratio,
+            generation_styles, is_single_style=True
+        )
+
+    except Exception as e:
+        logger.error(f"Error in continue_same_style: {e}", exc_info=True)
+        await callback.message.answer("❌ Произошла ошибка. Попробуйте снова.")
 
 @router.callback_query(F.data == "try_other_styles")
 async def try_other_styles(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
