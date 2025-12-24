@@ -1,6 +1,7 @@
 "User Handlers"
 import logging
 import asyncio
+from typing import Dict, List
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto, BufferedInputFile
@@ -15,7 +16,11 @@ from app.keyboards.inline import (
     get_saved_styles_keyboard,
     get_post_generation_keyboard,
     get_confirm_save_style_keyboard,
-    get_buy_packages_keyboard
+    get_buy_packages_keyboard,
+    get_initial_photo_keyboard,
+    get_style_choice_keyboard,
+    get_post_result_keyboard,
+    get_favorite_style_keyboard
 )
 from app.keyboards.user_kb import get_packages_keyboard, get_referral_menu, get_cancel_keyboard, get_main_menu
 from app.services.prompt_generator import PromptGenerator
@@ -139,38 +144,22 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, 
     welcome_text = f"""
 🎨 <b>Добро пожаловать в Product Photoshoot Bot!</b>
 
-Я помогу создать профессиональную фотосессию вашего товара в разных стилях! 📸
+Я помогу создать профессиональную фотосессию вашего товара! 📸
 
-<b>📋 Пошаговая инструкция:</b>
+<b>Как это работает:</b>
 
-1️⃣ <b>Загрузите фото товара</b>
-   • Только товар (БЕЗ людей и лиц!)
-   • Хорошее освещение
-   • Чистый фон
-   • Минимум 512x512 px
+1️⃣ Вы отправляете фото товара
+2️⃣ AI анализирует и создает 4 стиля оформления
+3️⃣ Вы выбираете понравившийся вариант
+4️⃣ Получаете готовые фото за ~1 минуту
 
-2️⃣ <b>Выберите пропорции</b>
-   • 1:1 — квадрат (Instagram)
-   • 4:5 — вертикальный
-   • 9:16 — Stories/Reels
-   • 16:9 — широкий формат
+<b>✅ Требования к фото:</b>
+• Только товар (БЕЗ людей!)
+• Хорошее освещение
+• Чистый фон
+• Товар хорошо виден
 
-3️⃣ <b>Выберите стили</b>
-   • AI анализ товара
-   • Случайные стили
-   • Свои сохраненные
-
-4️⃣ <b>Получите результат</b>
-   • 4 изображения за ~1 минуту
-   • Готовы к использованию
-
-⚠️ <b>ВАЖНО - Требования к фото:</b>
-❌ НЕ фотографируйте людей/лица
-✅ Только товар на чистом фоне
-✅ Хорошее качество и освещение
-✅ Товар в фокусе и хорошо виден
-
-💎 У вас есть <b>{user.images_remaining} бесплатных фотосессий</b>! 🎁
+💎 У вас есть <b>{user.images_remaining} бесплатных генераций</b>! 🎁
 
 📷 Отправьте фото товара, чтобы начать!
 """
@@ -406,42 +395,127 @@ async def balance_handler(message: Message, session: AsyncSession):
 @router.message(F.photo | F.document, StateFilter(None, PhotoshootStates.waiting_for_product_photo))
 async def handle_product_photo(message: Message, session: AsyncSession, state: FSMContext, bot: Bot):
     user = await get_or_create_user(session, message.from_user.id)
-    
+
     if user.images_remaining <= 0:
         await message.answer("😔 Недостаточно фотосессий! Купите пакет.", reply_markup=get_buy_packages_keyboard())
         return
 
     msg = await message.answer("⏳ Загружаю фото...")
-    
+
     try:
         if message.photo:
             file_id = message.photo[-1].file_id
         else:
             file_id = message.document.file_id
-            
+
         file = await bot.get_file(file_id)
         photo_bytes = await bot.download_file(file.file_path)
         photo_data = photo_bytes.read()
-        
+
         await state.update_data(product_image_bytes=photo_data, product_image_file_id=file_id)
-        await msg.edit_text("✅ Фото получено!\nВыберите пропорции:", reply_markup=get_aspect_ratio_keyboard())
-        await state.set_state(PhotoshootStates.selecting_aspect_ratio)
-        
+
+        # Auto-analyze with AI (Step 1: Auto-analysis)
+        await msg.edit_text("🔍 Анализирую ваше фото...")
+
+        # Default aspect ratio
+        default_aspect_ratio = "1:1"
+
+        # Use vision-based product detection and style generation
+        res = await prompt_generator.generate_styles_with_vision(
+            product_image_bytes=photo_data,
+            aspect_ratio=default_aspect_ratio,
+            random=False
+        )
+
+        if not res["success"]:
+            await msg.edit_text("❌ Ошибка анализа. Попробуйте другое фото.")
+            return
+
+        # Store analysis results
+        await state.update_data(
+            product_name=res["product_name"],
+            styles=res["styles"],
+            aspect_ratio=default_aspect_ratio
+        )
+
+        # Show analysis result with simplified message
+        result_text = (
+            f"✅ Распознано: <b>{res['product_name']}</b>\n"
+            f"📐 Рекомендую пропорции: <b>{default_aspect_ratio}</b> (квадрат для Instagram)\n"
+        )
+
+        await msg.edit_text(
+            result_text,
+            reply_markup=get_initial_photo_keyboard(default_aspect_ratio),
+            parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+
     except Exception as e:
         logger.error(f"Error: {e}")
         await msg.edit_text("❌ Ошибка загрузки. Попробуйте снова.")
 
 @router.callback_query(F.data.startswith("aspect_ratio:"))
-async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext):
+async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     await callback.answer()
+
     # Extract ratio correctly: "aspect_ratio:16:9" -> "16:9"
     ratio = ":".join(callback.data.split(":")[1:])
+    data = await state.get_data()
+
+    # Check if we need to regenerate styles with new aspect ratio
+    product_image_bytes = data.get("product_image_bytes")
+
+    if not product_image_bytes:
+        await callback.message.edit_text("❌ Ошибка: фото не найдено. Начните сначала.")
+        await state.clear()
+        return
+
+    # Update aspect ratio
     await state.update_data(aspect_ratio=ratio)
-    await callback.message.edit_text(
-        f"✅ Пропорции: <b>{ratio}</b>\nВыберите метод создания стилей:",
-        reply_markup=get_style_selection_keyboard(), parse_mode="HTML"
+
+    # Show analysis status
+    await callback.message.edit_text(f"🔍 Анализирую с пропорциями {ratio}...")
+
+    # Regenerate styles with new aspect ratio
+    res = await prompt_generator.generate_styles_with_vision(
+        product_image_bytes=product_image_bytes,
+        aspect_ratio=ratio,
+        random=False
     )
-    await state.set_state(PhotoshootStates.selecting_styles_method)
+
+    if not res["success"]:
+        await callback.message.edit_text("❌ Ошибка анализа. Попробуйте снова.")
+        return
+
+    # Update stored data
+    await state.update_data(
+        product_name=res["product_name"],
+        styles=res["styles"],
+        aspect_ratio=ratio
+    )
+
+    # Show updated result
+    user = await get_or_create_user(session, callback.from_user.id)
+
+    ratio_names = {
+        "1:1": "квадрат для Instagram",
+        "9:16": "вертикально для Stories",
+        "16:9": "горизонтально для сайта",
+        "4:5": "вертикально для карточки"
+    }
+
+    result_text = (
+        f"✅ Распознано: <b>{res['product_name']}</b>\n"
+        f"📐 Пропорции: <b>{ratio}</b> ({ratio_names.get(ratio, 'стандарт')})\n"
+    )
+
+    await callback.message.edit_text(
+        result_text,
+        reply_markup=get_initial_photo_keyboard(ratio),
+        parse_mode="HTML"
+    )
+    await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 @router.callback_query(F.data == "styles:analyze")
 async def analyze_styles(callback: CallbackQuery, state: FSMContext):
@@ -1006,6 +1080,380 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_main_menu()
     )
     await callback.answer()
+
+
+# ==================== NEW UX FLOW HANDLERS ====================
+
+@router.callback_query(F.data == "confirm_auto_generation")
+async def confirm_auto_generation(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """
+    User confirmed to create 4 variants with auto-detected styles
+    This shows the style preview before generation
+    """
+    await callback.answer()
+    data = await state.get_data()
+
+    if "styles" not in data:
+        await callback.message.edit_text("❌ Ошибка: стили не найдены. Начните сначала.")
+        await state.clear()
+        return
+
+    user = await get_or_create_user(session, callback.from_user.id)
+    styles = data["styles"]
+    product_name = data.get("product_name", "Товар")
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+
+    # Show style preview with choice
+    styles_text = "\n\n".join([
+        f"{i+1}. <b>{style['style_name']}</b>"
+        for i, style in enumerate(styles)
+    ])
+
+    preview_text = (
+        f"✨ Готово! Вот 4 варианта оформления:\n\n"
+        f"📦 Ваш товар: <b>{product_name}</b>\n"
+        f"📐 Формат: <b>{aspect_ratio}</b>\n"
+        f"💎 Осталось генераций: <b>{user.images_remaining}</b>\n\n"
+        f"🎨 Стили:\n{styles_text}\n\n"
+        f"Выберите, что сделать дальше:"
+    )
+
+    await callback.message.edit_text(
+        preview_text,
+        reply_markup=get_style_choice_keyboard(styles, product_name),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data == "change_aspect_ratio")
+async def change_aspect_ratio_handler(callback: CallbackQuery, state: FSMContext):
+    """Allow user to change aspect ratio"""
+    await callback.answer()
+    await callback.message.edit_text(
+        "📐 Выберите формат фото:",
+        reply_markup=get_aspect_ratio_keyboard()
+    )
+    await state.set_state(PhotoshootStates.selecting_aspect_ratio)
+
+@router.callback_query(F.data == "back_to_initial")
+async def back_to_initial(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Go back to initial choice after analysis"""
+    await callback.answer()
+    data = await state.get_data()
+
+    user = await get_or_create_user(session, callback.from_user.id)
+    product_name = data.get("product_name", "Товар")
+    aspect_ratio = data.get("aspect_ratio", "1:1")
+
+    result_text = (
+        f"✅ Распознано: <b>{product_name}</b>\n"
+        f"📐 Рекомендую пропорции: <b>{aspect_ratio}</b> (квадрат для Instagram)\n"
+    )
+
+    await callback.message.edit_text(
+        result_text,
+        reply_markup=get_initial_photo_keyboard(aspect_ratio),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("generate_single_style:"))
+async def generate_single_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """
+    Generate 4 variations of a single style
+    """
+    await callback.answer()
+
+    try:
+        style_index = int(callback.data.split(":")[1])
+        data = await state.get_data()
+
+        user = await get_or_create_user(session, callback.from_user.id)
+
+        if user.images_remaining < 1:
+            await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
+            return
+
+        styles = data.get("styles", [])
+        if style_index >= len(styles):
+            await callback.message.edit_text("❌ Ошибка: стиль не найден")
+            return
+
+        selected_style = styles[style_index]
+        aspect_ratio = data.get("aspect_ratio", "1:1")
+        product_name = data.get("product_name", "Товар")
+
+        # Create 4 variations of the same style
+        generation_styles = [selected_style] * 4
+
+        # Show generation status
+        await callback.message.edit_text(
+            f"🎨 Создаю 4 вариации в стиле \"{selected_style['style_name']}\"\n\n"
+            f"📦 Товар: {product_name}\n"
+            f"📐 Формат: {aspect_ratio}\n"
+            f"🎭 Стиль: {selected_style['style_name']}\n\n"
+            f"⏳ 40-60 секунд...",
+            parse_mode="HTML"
+        )
+
+        # Store the selected style index for "continue same style"
+        await state.update_data(last_generated_style_index=style_index, generation_type="single")
+
+        # Generate images
+        res = await image_processor.generate_photoshoot(
+            data["product_image_bytes"], generation_styles, aspect_ratio, bot, user, callback.message
+        )
+
+        await handle_generation_result(
+            res, callback.message, session, user, state, aspect_ratio,
+            generation_styles, is_single_style=True
+        )
+
+    except Exception as e:
+        logger.error(f"Error in generate_single_style: {e}", exc_info=True)
+        await callback.message.answer("❌ Произошла ошибка. Попробуйте снова.")
+
+@router.callback_query(F.data == "generate_mixed_styles")
+async def generate_mixed_styles(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """
+    Generate one image of each of the 4 styles
+    """
+    await callback.answer()
+
+    try:
+        data = await state.get_data()
+        user = await get_or_create_user(session, callback.from_user.id)
+
+        if user.images_remaining < 1:
+            await callback.message.edit_text("❌ Недостаточно средств!", reply_markup=get_buy_packages_keyboard())
+            return
+
+        styles = data.get("styles", [])
+        aspect_ratio = data.get("aspect_ratio", "1:1")
+        product_name = data.get("product_name", "Товар")
+
+        # Show generation status
+        style_names = ", ".join([s["style_name"] for s in styles])
+        await callback.message.edit_text(
+            f"🎨 Создаю по 1 фото в каждом стиле\n\n"
+            f"📦 Товар: {product_name}\n"
+            f"📐 Формат: {aspect_ratio}\n"
+            f"🎭 Стили: {style_names}\n\n"
+            f"⏳ 40-60 секунд...",
+            parse_mode="HTML"
+        )
+
+        # Store generation type
+        await state.update_data(generation_type="mixed")
+
+        # Generate images (one of each style)
+        res = await image_processor.generate_photoshoot(
+            data["product_image_bytes"], styles, aspect_ratio, bot, user, callback.message
+        )
+
+        await handle_generation_result(
+            res, callback.message, session, user, state, aspect_ratio,
+            styles, is_single_style=False
+        )
+
+    except Exception as e:
+        logger.error(f"Error in generate_mixed_styles: {e}", exc_info=True)
+        await callback.message.answer("❌ Произошла ошибка. Попробуйте снова.")
+
+@router.callback_query(F.data == "separator_ignore")
+async def separator_ignore(callback: CallbackQuery):
+    """Ignore separator button clicks"""
+    await callback.answer()
+
+@router.callback_query(F.data == "continue_same_style")
+async def continue_same_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Generate 4 more variations of the same style"""
+    data = await state.get_data()
+    style_index = data.get("last_generated_style_index", 0)
+
+    # Update callback data and reuse generate_single_style
+    callback.data = f"generate_single_style:{style_index}"
+    await generate_single_style(callback, state, session, bot)
+
+@router.callback_query(F.data == "try_other_styles")
+async def try_other_styles(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Generate new random styles"""
+    await random_styles(callback, state)
+
+@router.callback_query(F.data == "pick_favorite_style")
+async def pick_favorite_style(callback: CallbackQuery, state: FSMContext):
+    """Show keyboard to pick favorite style from mixed generation"""
+    await callback.answer()
+
+    data = await state.get_data()
+    styles = data.get("styles", [])
+
+    if not styles:
+        await callback.message.answer("❌ Ошибка: стили не найдены")
+        return
+
+    await callback.message.edit_text(
+        "Какой стиль понравился больше?",
+        reply_markup=get_favorite_style_keyboard(styles),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("favorite_style:"))
+async def favorite_style_selected(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """User selected favorite style, generate 4 more of it"""
+    await callback.answer()
+
+    # Extract style index and reuse generate_single_style
+    style_index = int(callback.data.split(":")[1])
+
+    # Update callback data to match generate_single_style format
+    callback.data = f"generate_single_style:{style_index}"
+    await generate_single_style(callback, state, session, bot)
+
+@router.callback_query(F.data == "check_balance")
+async def check_balance_callback(callback: CallbackQuery, session: AsyncSession):
+    """Show balance info"""
+    from datetime import datetime
+
+    user = await get_or_create_user(session, callback.from_user.id)
+    balance = await get_user_balance(session, callback.from_user.id)
+    stats = await get_user_detailed_stats(session, callback.from_user.id)
+
+    # Build balance message (simplified)
+    text = f"📊 <b>Ваш баланс</b>\n\n"
+    text += f"💎 <b>Доступно фотосессий:</b> <b>{balance['total']}</b>\n"
+    text += f"<i>(1 фотосессия = 4 изображения)</i>\n\n"
+    text += f"📈 Проведено фотосессий: <b>{stats['photoshoots_used']}</b>\n"
+    text += f"🖼️ Сгенерировано изображений: <b>{stats['images_generated']}</b>\n"
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_buy_packages_keyboard())
+    await callback.answer()
+
+
+async def handle_generation_result(
+    res: Dict,
+    message: Message,
+    session: AsyncSession,
+    user,
+    state: FSMContext,
+    aspect_ratio: str,
+    styles: List[Dict],
+    is_single_style: bool = False
+):
+    """
+    Unified handler for generation results
+
+    Args:
+        res: Result from image_processor.generate_photoshoot
+        message: Message to edit/reply to
+        session: DB session
+        user: User object
+        state: FSM state
+        aspect_ratio: Aspect ratio used
+        styles: Styles used for generation
+        is_single_style: True if generating variations of single style, False if mixed
+    """
+    if not res["success"]:
+        await message.edit_text(f"❌ Ошибка: {res.get('error', 'Неизвестная ошибка')}")
+        return
+
+    # Deduct balance
+    await update_user_images_count(session, user.id, -1)
+
+    # Check if this is free generation
+    from sqlalchemy import select, func
+    from app.database.models import Order
+    paid_orders_count = (await session.execute(
+        select(func.count(Order.id)).where(
+            Order.user_id == user.id,
+            Order.status == "paid"
+        )
+    )).scalar() or 0
+
+    is_free_generation = (paid_orders_count == 0 and user.total_images_processed < settings.FREE_PHOTOSHOOTS_COUNT)
+
+    # Track first image event for UTM users
+    if user.total_images_processed == 0 and (user.utm_source or user.utm_medium or user.utm_campaign):
+        await metrika_service.track_event(
+            session=session,
+            user_id=user.id,
+            event_type='first_image',
+            event_data={
+                'utm_source': user.utm_source,
+                'utm_medium': user.utm_medium,
+                'utm_campaign': user.utm_campaign
+            }
+        )
+
+    # Prepare media
+    media = []
+    successful_count = 0
+    failed_count = 0
+    style_names = []
+
+    for i, img in enumerate(res["images"]):
+        if img.get("success"):
+            try:
+                input_file = BufferedInputFile(
+                    img["image_bytes"],
+                    filename=f"photoshoot_{i}_{img['style_name']}.png"
+                )
+                media.append(InputMediaPhoto(media=input_file))
+                await create_processed_image(session, user.id, None, img["style_name"], img["prompt"], aspect_ratio, is_free=is_free_generation)
+                style_names.append(img['style_name'])
+                successful_count += 1
+            except Exception as e:
+                logger.error(f"Error preparing image {i}: {e}", exc_info=True)
+                failed_count += 1
+        else:
+            failed_count += 1
+
+    # Delete status message
+    try:
+        await message.delete()
+    except:
+        pass
+
+    # Send media group
+    if media:
+        try:
+            await message.answer_media_group(media)
+
+            # Refresh user balance
+            await session.refresh(user)
+
+            # Build summary
+            summary = "✅ <b>Готово! Вот ваши фото</b>\n\n"
+            summary += f"📊 <b>Что было сделано:</b>\n"
+            summary += f"├─ Товар: {await state.get_data() and (await state.get_data()).get('product_name', 'Товар')}\n"
+            summary += f"├─ Формат: {aspect_ratio}\n"
+
+            if is_single_style:
+                summary += f"├─ Стиль: {styles[0]['style_name']} (4 вариации)\n"
+            else:
+                summary += f"├─ Стили: {', '.join([s['style_name'] for s in styles])}\n"
+
+            summary += f"└─ Потрачено: 1 генерация\n\n"
+            summary += f"💎 Осталось генераций: <b>{user.images_remaining}</b>\n\n"
+            summary += f"Что делать дальше?"
+
+            await message.answer(
+                summary,
+                reply_markup=get_post_result_keyboard(
+                    has_balance=user.images_remaining > 0,
+                    can_continue_style=is_single_style,
+                    balance=user.images_remaining
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Error sending media group: {e}", exc_info=True)
+            await message.answer(f"❌ Ошибка отправки: {str(e)}")
+    else:
+        await message.answer(
+            "❌ Не удалось сгенерировать изображения.\nПопробуйте еще раз.",
+            reply_markup=get_buy_packages_keyboard() if user.images_remaining == 0 else None
+        )
+
+    await state.update_data(last_generated=True)
 
 
 # ==================== DIRECT PACKAGE PURCHASE ====================
