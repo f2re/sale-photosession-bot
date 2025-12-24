@@ -412,36 +412,19 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
         photo_bytes = await bot.download_file(file.file_path)
         photo_data = photo_bytes.read()
 
-        await state.update_data(product_image_bytes=photo_data, product_image_file_id=file_id)
-
-        # Auto-analyze with AI (Step 1: Auto-analysis)
-        await msg.edit_text("🔍 Анализирую ваше фото...")
-
-        # Default aspect ratio
+        # Store photo data - NO GENERATION YET!
         default_aspect_ratio = "1:1"
-
-        # Use vision-based product detection and style generation
-        res = await prompt_generator.generate_styles_with_vision(
-            product_image_bytes=photo_data,
-            aspect_ratio=default_aspect_ratio,
-            random=False
-        )
-
-        if not res["success"]:
-            await msg.edit_text("❌ Ошибка анализа. Попробуйте другое фото.")
-            return
-
-        # Store analysis results
         await state.update_data(
-            product_name=res["product_name"],
-            styles=res["styles"],
+            product_image_bytes=photo_data,
+            product_image_file_id=file_id,
             aspect_ratio=default_aspect_ratio
         )
 
-        # Show analysis result with simplified message
+        # Simple confirmation - generation happens AFTER user confirms
         result_text = (
-            f"✅ Распознано: <b>{res['product_name']}</b>\n"
-            f"📐 Рекомендую пропорции: <b>{default_aspect_ratio}</b> (квадрат для Instagram)\n"
+            f"✅ Фото получено!\n"
+            f"📐 Пропорции: <b>{default_aspect_ratio}</b> (квадрат для Instagram)\n\n"
+            f"💎 У вас: <b>{user.images_remaining}</b> генераций"
         )
 
         await msg.edit_text(
@@ -449,7 +432,7 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
             reply_markup=get_initial_photo_keyboard(default_aspect_ratio),
             parse_mode="HTML"
         )
-        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+        await state.set_state(PhotoshootStates.waiting_for_confirmation)
 
     except Exception as e:
         logger.error(f"Error: {e}")
@@ -461,41 +444,10 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
 
     # Extract ratio correctly: "aspect_ratio:16:9" -> "16:9"
     ratio = ":".join(callback.data.split(":")[1:])
-    data = await state.get_data()
 
-    # Check if we need to regenerate styles with new aspect ratio
-    product_image_bytes = data.get("product_image_bytes")
-
-    if not product_image_bytes:
-        await callback.message.edit_text("❌ Ошибка: фото не найдено. Начните сначала.")
-        await state.clear()
-        return
-
-    # Update aspect ratio
+    # Just update aspect ratio - NO generation yet!
     await state.update_data(aspect_ratio=ratio)
 
-    # Show analysis status
-    await callback.message.edit_text(f"🔍 Анализирую с пропорциями {ratio}...")
-
-    # Regenerate styles with new aspect ratio
-    res = await prompt_generator.generate_styles_with_vision(
-        product_image_bytes=product_image_bytes,
-        aspect_ratio=ratio,
-        random=False
-    )
-
-    if not res["success"]:
-        await callback.message.edit_text("❌ Ошибка анализа. Попробуйте снова.")
-        return
-
-    # Update stored data
-    await state.update_data(
-        product_name=res["product_name"],
-        styles=res["styles"],
-        aspect_ratio=ratio
-    )
-
-    # Show updated result
     user = await get_or_create_user(session, callback.from_user.id)
 
     ratio_names = {
@@ -506,8 +458,9 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
     }
 
     result_text = (
-        f"✅ Распознано: <b>{res['product_name']}</b>\n"
-        f"📐 Пропорции: <b>{ratio}</b> ({ratio_names.get(ratio, 'стандарт')})\n"
+        f"✅ Фото получено!\n"
+        f"📐 Пропорции: <b>{ratio}</b> ({ratio_names.get(ratio, 'стандарт')})\n\n"
+        f"💎 У вас: <b>{user.images_remaining}</b> генераций"
     )
 
     await callback.message.edit_text(
@@ -515,7 +468,7 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
         reply_markup=get_initial_photo_keyboard(ratio),
         parse_mode="HTML"
     )
-    await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+    await state.set_state(PhotoshootStates.waiting_for_confirmation)
 
 @router.callback_query(F.data == "styles:analyze")
 async def analyze_styles(callback: CallbackQuery, state: FSMContext):
@@ -1093,42 +1046,62 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "confirm_auto_generation")
 async def confirm_auto_generation(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """
-    User confirmed to create 4 variants with auto-detected styles
-    This shows the style preview before generation
+    User confirmed to create 4 variants
+    NOW we generate styles with AI analysis
     """
     await callback.answer()
     data = await state.get_data()
 
-    if "styles" not in data:
-        await callback.message.edit_text("❌ Ошибка: стили не найдены. Начните сначала.")
+    # Check if we have photo
+    product_image_bytes = data.get("product_image_bytes")
+    if not product_image_bytes:
+        await callback.message.edit_text("❌ Ошибка: фото не найдено. Начните сначала.")
         await state.clear()
         return
 
     user = await get_or_create_user(session, callback.from_user.id)
-    styles = data["styles"]
-    product_name = data.get("product_name", "Товар")
     aspect_ratio = data.get("aspect_ratio", "1:1")
 
+    # NOW generate styles (only after user confirmed!)
+    await callback.message.edit_text("🔍 Анализирую товар и создаю стили...")
+
+    res = await prompt_generator.generate_styles_with_vision(
+        product_image_bytes=product_image_bytes,
+        aspect_ratio=aspect_ratio,
+        random=False
+    )
+
+    if not res["success"]:
+        await callback.message.edit_text("❌ Ошибка анализа. Попробуйте снова.")
+        return
+
+    # Store generated styles
+    await state.update_data(
+        product_name=res["product_name"],
+        styles=res["styles"]
+    )
+
     # Show style preview with choice
-    styles_text = "\n\n".join([
+    styles_text = "\n".join([
         f"{i+1}. <b>{style['style_name']}</b>"
-        for i, style in enumerate(styles)
+        for i, style in enumerate(res["styles"])
     ])
 
     preview_text = (
         f"✨ Готово! Вот 4 варианта оформления:\n\n"
-        f"📦 Ваш товар: <b>{product_name}</b>\n"
+        f"📦 Товар: <b>{res['product_name']}</b>\n"
         f"📐 Формат: <b>{aspect_ratio}</b>\n"
-        f"💎 Осталось генераций: <b>{user.images_remaining}</b>\n\n"
-        f"🎨 Стили:\n{styles_text}\n\n"
-        f"Выберите, что сделать дальше:"
+        f"💎 Осталось: <b>{user.images_remaining}</b> генераций\n\n"
+        f"🎨 <b>Стили:</b>\n{styles_text}\n\n"
+        f"Выберите действие:"
     )
 
     await callback.message.edit_text(
         preview_text,
-        reply_markup=get_style_choice_keyboard(styles, product_name),
+        reply_markup=get_style_choice_keyboard(res["styles"], res["product_name"]),
         parse_mode="HTML"
     )
+    await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 @router.callback_query(F.data == "change_aspect_ratio")
 async def change_aspect_ratio_handler(callback: CallbackQuery, state: FSMContext):
@@ -1263,11 +1236,6 @@ async def generate_mixed_styles(callback: CallbackQuery, state: FSMContext, sess
     except Exception as e:
         logger.error(f"Error in generate_mixed_styles: {e}", exc_info=True)
         await callback.message.answer("❌ Произошла ошибка. Попробуйте снова.")
-
-@router.callback_query(F.data == "separator_ignore")
-async def separator_ignore(callback: CallbackQuery):
-    """Ignore separator button clicks"""
-    await callback.answer()
 
 @router.callback_query(F.data == "continue_same_style")
 async def continue_same_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
