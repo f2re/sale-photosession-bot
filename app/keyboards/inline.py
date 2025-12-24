@@ -147,78 +147,93 @@ def get_initial_photo_keyboard(aspect_ratio: str = "1:1") -> InlineKeyboardMarku
 def get_style_choice_keyboard(styles: List[Dict], product_name: str = "") -> InlineKeyboardMarkup:
     """
     Keyboard for choosing which styles to generate after seeing style previews
+    Optimized: style names on buttons, grouped layout
     """
     builder = InlineKeyboardBuilder()
 
-    # Add buttons for each individual style (1-4)
-    for i in range(len(styles)):
+    # Add buttons for each individual style with NAMES (1-4)
+    for i, style in enumerate(styles):
+        style_name = style.get("style_name", f"Стиль {i+1}")
+        # Truncate long names
+        if len(style_name) > 20:
+            style_name = style_name[:18] + "..."
         builder.button(
-            text=f"{i+1}️⃣ Только стиль №{i+1} (4 фото)",
+            text=f"{i+1}️⃣ {style_name}",
             callback_data=f"generate_single_style:{i}"
         )
 
-    # Separator
-    builder.button(text="────────────────", callback_data="separator_ignore")
-    builder.button(text="🎨 По одному каждого (4 фото)", callback_data="generate_mixed_styles")
-    builder.button(text="────────────────", callback_data="separator_ignore")
+    # Mixed generation option
+    builder.button(text="🎨 По одному каждого", callback_data="generate_mixed_styles")
 
     # Additional options
-    builder.button(text="🔄 Создать другие стили", callback_data="styles:random")
-    builder.button(text="📐 Изменить пропорции", callback_data="change_aspect_ratio")
+    builder.button(text="🔄 Другие стили", callback_data="styles:random")
+    builder.button(text="📐 Пропорции", callback_data="change_aspect_ratio")
     builder.button(text="❌ Отмена", callback_data="cancel_action")
 
-    builder.adjust(1)
+    # Grouped layout: 2-2-1-2-1
+    builder.adjust(2, 2, 1, 2, 1)
     return builder.as_markup()
 
 def get_post_result_keyboard(has_balance: bool, can_continue_style: bool = False, balance: int = 0) -> InlineKeyboardMarkup:
     """
     Keyboard shown after successful generation
-    Adapts based on context (single style vs mixed)
+    Optimized: no separators, grouped layout
     """
     builder = InlineKeyboardBuilder()
 
     if has_balance:
         if can_continue_style:
             # User generated single style - offer to continue with same
-            builder.button(text="➕ Ещё 4 вариации (тот же стиль)", callback_data="continue_same_style")
-            builder.button(text="🎨 Попробовать другой стиль", callback_data="try_other_styles")
+            builder.button(text="➕ Ещё вариации", callback_data="continue_same_style")
+            builder.button(text="🎨 Другой стиль", callback_data="try_other_styles")
         else:
             # User generated mixed styles - offer to pick favorite
-            builder.button(text="🎨 Выбрать любимый стиль", callback_data="pick_favorite_style")
+            builder.button(text="❤️ Выбрать любимый", callback_data="pick_favorite_style")
+            builder.button(text="🔄 Новое фото", callback_data="new_photoshoot")
 
-        builder.button(text="────────────────", callback_data="separator_ignore")
-        builder.button(text="🔄 Новое фото товара", callback_data="new_photoshoot")
-        builder.button(text="📐 Изменить пропорции", callback_data="change_aspect_ratio")
-        builder.button(text="💾 Сохранить этот стиль", callback_data="save_style")
-        builder.button(text="────────────────", callback_data="separator_ignore")
-        builder.button(text=f"📊 Мой баланс ({balance} генераций)", callback_data="check_balance")
-        builder.button(text="💎 Купить генерации", callback_data="show_packages")
+        # Common actions
+        builder.button(text="📐 Пропорции", callback_data="change_aspect_ratio")
+        builder.button(text="💾 Сохранить", callback_data="save_style")
+        builder.button(text=f"📊 Баланс: {balance}", callback_data="check_balance")
+        builder.button(text="💎 Купить", callback_data="show_packages")
+
+        # Grouped layout: 2-2-2-2 or 1-2-2-2
+        if can_continue_style:
+            builder.adjust(2, 2, 2, 2)
+        else:
+            builder.adjust(2, 2, 2, 2)
     else:
         # No balance
         builder.button(text="💎 Купить пакет", callback_data="show_packages")
         builder.button(text="📊 Мой баланс", callback_data="check_balance")
+        builder.adjust(2)
 
-    builder.adjust(1)
     return builder.as_markup()
 
 def get_favorite_style_keyboard(styles: List[Dict]) -> InlineKeyboardMarkup:
     """
     Keyboard for selecting favorite style after mixed generation
+    Optimized: compact style names, no separators, grouped
     """
     builder = InlineKeyboardBuilder()
 
+    # Style selection buttons with compact names
     for i, style in enumerate(styles):
         style_name = style.get("style_name", f"Стиль {i+1}")
+        # Shorter text for better layout
+        if len(style_name) > 15:
+            style_name = style_name[:13] + "..."
         builder.button(
-            text=f"{i+1}️⃣ {style_name} - ещё 4 варианта",
+            text=f"{i+1}️⃣ {style_name}",
             callback_data=f"favorite_style:{i}"
         )
 
-    builder.button(text="────────────────", callback_data="separator_ignore")
-    builder.button(text="◀️ Назад к результатам", callback_data="back_to_results")
-    builder.button(text="🔄 Новое фото товара", callback_data="new_photoshoot")
-    builder.button(text="🎨 Создать другие стили", callback_data="styles:random")
-    builder.button(text="💾 Сохранить стиль", callback_data="save_style")
+    # Navigation and actions
+    builder.button(text="◀️ Назад", callback_data="back_to_results")
+    builder.button(text="🔄 Новое фото", callback_data="new_photoshoot")
+    builder.button(text="🎨 Другие стили", callback_data="styles:random")
+    builder.button(text="💾 Сохранить", callback_data="save_style")
 
-    builder.adjust(1)
+    # Grouped layout: 2-2 for styles, then 2-2 for actions
+    builder.adjust(2, 2, 2, 2)
     return builder.as_markup()
