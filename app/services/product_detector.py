@@ -80,10 +80,12 @@ IMPORTANT RULES:
     "product_type": "Specific product type (e.g., 'Wireless Headphones', 'Leather Wallet', 'Face Cream') in Russian",
     "product_name": "Descriptive product name (e.g., 'Premium Over-Ear Wireless Headphones', 'Handcrafted Leather Bifold Wallet') in Russian",
     "description": "Detailed description including materials, style, features, color, distinctive characteristics",
-    "category": "One of: Fashion, Electronics, Beauty, Home, Food, Sports, Jewelry, Accessories, Other"
+    "category": "One of: Fashion, Electronics, Beauty, Home, Food, Sports, Jewelry, Accessories, Other",
+    "recommended_aspect_ratio": "One of: 1:1, 9:16, 16:9, 4:5 based on product type and typical usage (1:1 for Instagram posts, 9:16 for Stories/Reels, 4:5 for vertical posts, 16:9 for horizontal/website)"
 }
 
-Be specific, accurate, and focus on marketable product features that would be relevant for product photography."""
+Be specific, accurate, and focus on marketable product features that would be relevant for product photography.
+For recommended_aspect_ratio, consider: Fashion/Beauty often use 4:5 or 1:1, Electronics/Tech use 16:9 or 1:1, Stories-style products use 9:16."""
 
             # Payload for chat completion with vision
             payload = {
