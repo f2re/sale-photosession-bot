@@ -5,8 +5,10 @@ import logging
 import asyncio
 import aiohttp
 import base64
+import gc
 from io import BytesIO
 from typing import Dict, List
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 from aiogram import Bot
 
@@ -14,8 +16,13 @@ from app.database.models import User
 from app.services.nanobanana import NanoBananaService
 from app.services.notification_service import NotificationService
 from app.config import settings
+from app.utils.api_retry import vision_api_retry
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for CPU-intensive image operations
+# Prevents blocking the event loop during image processing
+image_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="image_proc")
 
 class ImageProcessor:
     def __init__(self):
@@ -23,7 +30,30 @@ class ImageProcessor:
         self.openrouter_api_key = settings.OPENROUTER_API_KEY
         self.vision_model = "google/gemini-2.0-flash-exp:free"  # Fast and free vision model
 
-    def _convert_webp_to_png(self, image_bytes: bytes) -> bytes:
+    async def _make_vision_request(self, payload: dict, headers: dict) -> dict:
+        """
+        Make vision API request with proper timeout handling.
+        Used by retry handler for resilient API calls.
+        """
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=25)  # Controlled by retry handler
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Vision API error: {response.status} - {error_text}")
+                    raise aiohttp.ClientError(f"Vision API returned status {response.status}")
+
+    def _convert_webp_to_png_sync(self, image_bytes: bytes) -> bytes:
+        """
+        Synchronous WebP to PNG conversion.
+        Called via thread pool to avoid blocking event loop.
+        """
         try:
             img = Image.open(BytesIO(image_bytes))
             if img.mode in ('RGBA', 'LA', 'P'):
@@ -31,11 +61,30 @@ class ImageProcessor:
             else:
                 img = img.convert('RGB')
             output = BytesIO()
-            img.save(output, format='PNG', optimize=True)
-            return output.getvalue()
+            # Reduce optimization level for speed (6 is good balance)
+            img.save(output, format='PNG', optimize=False, compress_level=6)
+            result = output.getvalue()
+
+            # Clean up
+            img.close()
+            output.close()
+
+            return result
         except Exception as e:
             logger.error(f"WebP conversion error: {e}")
             raise
+
+    async def _convert_webp_to_png(self, image_bytes: bytes) -> bytes:
+        """
+        Async wrapper for WebP to PNG conversion.
+        Runs in thread pool to avoid blocking event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            image_executor,
+            self._convert_webp_to_png_sync,
+            image_bytes
+        )
 
     async def analyze_product_image(self, image_bytes: bytes) -> Dict:
         """
@@ -111,36 +160,23 @@ Your description:"""
 
             logger.info(f"Sending product analysis request to vision API (model: {self.vision_model})")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
+            # Use retry handler for resilient vision API calls
+            result = await vision_api_retry.execute_with_retry(
+                self._make_vision_request,
+                payload,
+                headers
+            )
 
-                        # Extract description from response
-                        description = result['choices'][0]['message']['content'].strip()
+            # Extract description from response
+            description = result['choices'][0]['message']['content'].strip()
 
-                        logger.info(f"Product analysis successful: {description[:100]}...")
+            logger.info(f"Product analysis successful: {description[:100]}...")
 
-                        return {
-                            "success": True,
-                            "product_description": description,
-                            "error": None
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Vision API error: {response.status} - {error_text}")
-
-                        # Fallback to generic description
-                        return {
-                            "success": False,
-                            "product_description": "A high-end commercial product",
-                            "error": f"API error: {response.status}"
-                        }
+            return {
+                "success": True,
+                "product_description": description,
+                "error": None
+            }
 
         except Exception as e:
             logger.error(f"Error analyzing product image: {e}", exc_info=True)
@@ -237,6 +273,15 @@ Your description:"""
                     })
                     successful_count += 1
 
+            # Explicit memory cleanup for large batches
+            del results
+            del tasks
+            product_image_bytes = None  # Release reference to original image
+
+            # Force garbage collection if processing many images
+            if total_styles >= 4:
+                gc.collect()
+
             # Update progress: generation complete
             if progress_message:
                 try:
@@ -266,6 +311,8 @@ Your description:"""
 
         except Exception as e:
             logger.error(f"Critical error in generate_photoshoot: {e}", exc_info=True)
+            # Ensure cleanup on error
+            gc.collect()
             return {"success": False, "error": "Internal processing error"}
 
     async def _generate_single_variant(self, img_bytes, prompt, style_name, ratio):

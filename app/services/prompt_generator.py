@@ -9,6 +9,7 @@ import re
 from typing import Dict, List, Optional
 from app.config import settings
 from app.services.product_detector import ProductDetector
+from app.utils.api_retry import prompt_api_retry
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,25 @@ Be maximally creative! Use different:
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         self.product_detector = ProductDetector()
 
+    async def _make_api_request(self, payload: dict, headers: dict) -> dict:
+        """
+        Make API request with proper timeout handling.
+        Used by retry handler for resilient API calls.
+        """
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.base_url,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30)  # Controlled by retry handler
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    logger.error(f"API error: {response.status} - {error_text}")
+                    raise aiohttp.ClientError(f"API returned status {response.status}")
+
     def _extract_json_from_response(self, content: str) -> str:
         """
         Extract JSON from response that might be wrapped in markdown code blocks.
@@ -497,52 +517,45 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
 
             logger.info(f"Generating {'random' if random else 'analyzed'} styles for: {product_text[:50]}")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.base_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        content = result['choices'][0]['message']['content']
+            # Use retry handler for resilient API calls
+            result = await prompt_api_retry.execute_with_retry(
+                self._make_api_request,
+                payload,
+                headers
+            )
 
-                        # Parse JSON
-                        try:
-                            logger.debug(f"LLM raw response (first 200 chars): {content}")
+            content = result['choices'][0]['message']['content']
 
-                            # Extract JSON from potential markdown wrapper
-                            clean_json = self._extract_json_from_response(content)
-                            logger.debug(f"Clean JSON (first 200 chars): {clean_json[:200]}...")
+            # Parse JSON
+            try:
+                logger.debug(f"LLM raw response (first 200 chars): {content}")
 
-                            # Parse the cleaned JSON
-                            data = json.loads(clean_json)
+                # Extract JSON from potential markdown wrapper
+                clean_json = self._extract_json_from_response(content)
+                logger.debug(f"Clean JSON (first 200 chars): {clean_json[:200]}...")
 
-                            # Validate structure
-                            if not self._validate_response(data, num_styles):
-                                logger.warning(f"Invalid JSON structure: {data}")
-                                raise ValueError("Invalid JSON structure")
+                # Parse the cleaned JSON
+                data = json.loads(clean_json)
 
-                            logger.info(f"Successfully generated styles for: {data.get('product_name', 'unknown')}")
+                # Validate structure
+                if not self._validate_response(data, num_styles):
+                    logger.warning(f"Invalid JSON structure: {data}")
+                    raise ValueError("Invalid JSON structure")
 
-                            return {
-                                "success": True,
-                                "product_name": data["product_name"],
-                                "styles": data["styles"],
-                                "error": None
-                            }
+                logger.info(f"Successfully generated styles for: {data.get('product_name', 'unknown')}")
 
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse JSON response: {e}")
-                            logger.debug(f"Response content: {content}")
-                            logger.warning("Using fallback prompts")
-                            return self._fallback_response(product_description, aspect_ratio)
+                return {
+                    "success": True,
+                    "product_name": data["product_name"],
+                    "styles": data["styles"],
+                    "error": None
+                }
 
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"API error: {response.status} - {error_text}")
-                        return self._fallback_response(product_description, aspect_ratio)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {e}")
+                logger.debug(f"Response content: {content}")
+                logger.warning("Using fallback prompts")
+                return self._fallback_response(product_description, aspect_ratio)
 
         except Exception as e:
             logger.error(f"Error generating styles: {e}", exc_info=True)
@@ -659,60 +672,47 @@ Return result STRICTLY in JSON format with exactly {num_variations} style variat
                 "response_format": {"type": "json_object"}
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.base_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        content = result['choices'][0]['message']['content']
+            # Use retry handler for resilient API calls
+            result = await prompt_api_retry.execute_with_retry(
+                self._make_api_request,
+                payload,
+                headers
+            )
 
-                        try:
-                            clean_json = self._extract_json_from_response(content)
-                            data = json.loads(clean_json)
+            content = result['choices'][0]['message']['content']
 
-                            if not self._validate_response(data, num_variations):
-                                logger.warning(f"Invalid JSON structure for variations")
-                                # Fallback: use base style duplicated
-                                return {
-                                    "success": True,
-                                    "product_name": product_name,
-                                    "styles": [base_style] * num_variations,
-                                    "error": None
-                                }
+            try:
+                clean_json = self._extract_json_from_response(content)
+                data = json.loads(clean_json)
 
-                            logger.info(f"Successfully generated {len(data['styles'])} style variations")
+                if not self._validate_response(data, num_variations):
+                    logger.warning(f"Invalid JSON structure for variations")
+                    # Fallback: use base style duplicated
+                    return {
+                        "success": True,
+                        "product_name": product_name,
+                        "styles": [base_style] * num_variations,
+                        "error": None
+                    }
 
-                            return {
-                                "success": True,
-                                "product_name": data.get("product_name", product_name),
-                                "styles": data["styles"][:num_variations],
-                                "error": None
-                            }
+                logger.info(f"Successfully generated {len(data['styles'])} style variations")
 
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse variation JSON: {e}")
-                            # Fallback: use base style duplicated
-                            return {
-                                "success": True,
-                                "product_name": product_name,
-                                "styles": [base_style] * num_variations,
-                                "error": None
-                            }
+                return {
+                    "success": True,
+                    "product_name": data.get("product_name", product_name),
+                    "styles": data["styles"][:num_variations],
+                    "error": None
+                }
 
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"API error for variations: {response.status} - {error_text}")
-                        # Fallback: use base style duplicated
-                        return {
-                            "success": True,
-                            "product_name": product_name,
-                            "styles": [base_style] * num_variations,
-                            "error": None
-                        }
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse variation JSON: {e}")
+                # Fallback: use base style duplicated
+                return {
+                    "success": True,
+                    "product_name": product_name,
+                    "styles": [base_style] * num_variations,
+                    "error": None
+                }
 
         except Exception as e:
             logger.error(f"Error generating style variations: {e}", exc_info=True)

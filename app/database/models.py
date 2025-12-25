@@ -75,6 +75,13 @@ class Package(Base):
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        # Performance indices for common order queries
+        Index('idx_orders_created', 'created_at'),
+        Index('idx_orders_paid', 'paid_at'),
+        Index('idx_orders_status_created', 'status', 'created_at'),
+        Index('idx_orders_user_status', 'user_id', 'status'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
@@ -98,20 +105,27 @@ class Order(Base):
 
 class ProcessedImage(Base):
     __tablename__ = "processed_images"
+    __table_args__ = (
+        # Performance indices for common queries
+        Index('idx_processed_images_created', 'created_at'),
+        Index('idx_processed_images_user_created', 'user_id', 'created_at'),
+        Index('idx_processed_images_style', 'style_name'),
+        Index('idx_processed_images_user_style', 'user_id', 'style_name'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
     order_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("orders.id"), nullable=True)
-    
+
     telegram_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     original_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     processed_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
+
     # Style info
     style_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     prompt_used: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     aspect_ratio: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    
+
     is_free: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
