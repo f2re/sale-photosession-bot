@@ -1,12 +1,22 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from .models import Base
 
 
 class Database:
     def __init__(self, db_url: str):
-        self.engine = create_async_engine(db_url, poolclass=NullPool, echo=False)
+        # Use proper connection pooling for production
+        self.engine = create_async_engine(
+            db_url,
+            poolclass=AsyncAdaptedQueuePool,  # Use connection pool instead of NullPool
+            pool_size=10,  # Core pool size - connections kept alive
+            max_overflow=20,  # Additional connections under load
+            pool_timeout=30,  # Wait time for connection (seconds)
+            pool_recycle=3600,  # Recycle connections every hour (prevents stale connections)
+            pool_pre_ping=True,  # Check connection health before use
+            echo=False
+        )
         self.session_maker = async_sessionmaker(
             self.engine,
             class_=AsyncSession,
