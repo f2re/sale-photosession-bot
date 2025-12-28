@@ -400,7 +400,91 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
         await message.answer("😔 Недостаточно фотосессий! Купите пакет.", reply_markup=get_buy_packages_keyboard())
         return
 
-    msg = await message.answer("⏳ Загружаю фото...")
+    # Check if this is part of a media group (album)
+    is_album = message.media_group_id is not None
+
+    # For albums, use the old flow (manual confirmation)
+    if is_album:
+        msg = await message.answer("⏳ Загружаю фото...")
+
+        try:
+            if message.photo:
+                file_id = message.photo[-1].file_id
+            else:
+                file_id = message.document.file_id
+
+            file = await bot.get_file(file_id)
+            photo_bytes = await bot.download_file(file.file_path)
+            photo_data = photo_bytes.read()
+
+            # Stage 1: Product Detection (Gemini Flash - CHEAP)
+            await msg.edit_text("🔍 Анализирую товар...")
+
+            detection_result = await prompt_generator.product_detector.detect_product(photo_data)
+
+            if detection_result["success"]:
+                product_name = detection_result["product_name"]
+                product_type = detection_result["product_type"]
+                description = detection_result["description"]
+                recommended_ratio = detection_result.get("recommended_aspect_ratio", "1:1")
+
+                # Store all detected info
+                await state.update_data(
+                    product_image_bytes=photo_data,
+                    product_image_file_id=file_id,
+                    product_name=product_name,
+                    product_type=product_type,
+                    product_description=f"{product_name}. {description}",
+                    aspect_ratio=recommended_ratio,
+                    style_generation_attempts=0  # Initialize counter
+                )
+
+                ratio_names = {
+                    "1:1": "квадрат для Instagram",
+                    "9:16": "вертикально для Stories",
+                    "16:9": "горизонтально для сайта",
+                    "4:5": "вертикально для карточки"
+                }
+
+                result_text = (
+                    f"✅ <b>Распознано:</b> {product_name}\n"
+                    f"📦 <b>Тип:</b> {product_type}\n"
+                    f"📐 <b>Рекомендую:</b> {recommended_ratio} ({ratio_names.get(recommended_ratio, 'стандарт')})\n\n"
+                    f"💎 <b>У вас:</b> {user.images_remaining} генераций"
+                )
+            else:
+                # Fallback if detection fails
+                logger.warning(f"Product detection failed: {detection_result.get('error')}")
+                await state.update_data(
+                    product_image_bytes=photo_data,
+                    product_image_file_id=file_id,
+                    product_name="Товар",
+                    product_type="Премиум товар",
+                    product_description="Высококачественный коммерческий продукт",
+                    aspect_ratio="1:1",
+                    style_generation_attempts=0
+                )
+
+                result_text = (
+                    f"✅ Фото получено!\n"
+                    f"📐 Пропорции: <b>1:1</b> (квадрат для Instagram)\n\n"
+                    f"💎 У вас: <b>{user.images_remaining}</b> генераций"
+                )
+
+            await msg.edit_text(
+                result_text,
+                reply_markup=get_initial_photo_keyboard(detection_result.get("recommended_aspect_ratio", "1:1") if detection_result["success"] else "1:1"),
+                parse_mode="HTML"
+            )
+            await state.set_state(PhotoshootStates.waiting_for_confirmation)
+
+        except Exception as e:
+            logger.error(f"Error in product detection: {e}", exc_info=True)
+            await msg.edit_text("❌ Ошибка анализа. Попробуйте снова.")
+        return
+
+    # For single photos, automatically analyze and create styles
+    msg = await message.answer("📸 Анализ фото...")
 
     try:
         if message.photo:
@@ -413,68 +497,109 @@ async def handle_product_photo(message: Message, session: AsyncSession, state: F
         photo_data = photo_bytes.read()
 
         # Stage 1: Product Detection (Gemini Flash - CHEAP)
-        await msg.edit_text("🔍 Анализирую товар...")
+        await msg.edit_text("🔍 Распознаю товар...")
 
         detection_result = await prompt_generator.product_detector.detect_product(photo_data)
+
+        product_name = "Товар"
+        product_type = "Премиум товар"
+        product_description = "Высококачественный коммерческий продукт"
+        recommended_ratio = "1:1"
 
         if detection_result["success"]:
             product_name = detection_result["product_name"]
             product_type = detection_result["product_type"]
             description = detection_result["description"]
             recommended_ratio = detection_result.get("recommended_aspect_ratio", "1:1")
+            product_description = f"{product_name}. {description}"
 
-            # Store all detected info
-            await state.update_data(
-                product_image_bytes=photo_data,
-                product_image_file_id=file_id,
-                product_name=product_name,
-                product_type=product_type,
-                product_description=f"{product_name}. {description}",
-                aspect_ratio=recommended_ratio,
-                style_generation_attempts=0  # Initialize counter
-            )
-
-            ratio_names = {
-                "1:1": "квадрат для Instagram",
-                "9:16": "вертикально для Stories",
-                "16:9": "горизонтально для сайта",
-                "4:5": "вертикально для карточки"
-            }
-
-            result_text = (
-                f"✅ <b>Распознано:</b> {product_name}\n"
-                f"📦 <b>Тип:</b> {product_type}\n"
-                f"📐 <b>Рекомендую:</b> {recommended_ratio} ({ratio_names.get(recommended_ratio, 'стандарт')})\n\n"
-                f"💎 <b>У вас:</b> {user.images_remaining} генераций"
-            )
+            # Show what was detected
+            await msg.edit_text(f"✅ Распознал: <b>{product_name}</b>", parse_mode="HTML")
         else:
-            # Fallback if detection fails
             logger.warning(f"Product detection failed: {detection_result.get('error')}")
-            await state.update_data(
-                product_image_bytes=photo_data,
-                product_image_file_id=file_id,
-                product_name="Товар",
-                product_type="Премиум товар",
-                product_description="Высококачественный коммерческий продукт",
-                aspect_ratio="1:1",
-                style_generation_attempts=0
-            )
+            await msg.edit_text("✅ Фото получено!")
 
-            result_text = (
-                f"✅ Фото получено!\n"
-                f"📐 Пропорции: <b>1:1</b> (квадрат для Instagram)\n\n"
-                f"💎 У вас: <b>{user.images_remaining}</b> генераций"
-            )
+        # Store all detected info
+        await state.update_data(
+            product_image_bytes=photo_data,
+            product_image_file_id=file_id,
+            product_name=product_name,
+            product_type=product_type,
+            product_description=product_description,
+            aspect_ratio=recommended_ratio,
+            style_generation_attempts=0  # Initialize counter
+        )
 
+        # Small delay to show the detection result
+        await asyncio.sleep(0.5)
+
+        # Stage 2: Generate styles automatically
         await msg.edit_text(
-            result_text,
-            reply_markup=get_initial_photo_keyboard(detection_result.get("recommended_aspect_ratio", "1:1") if detection_result["success"] else "1:1"),
+            f"✅ Распознал: <b>{product_name}</b>\n\n"
+            f"✨ Создаю варианты фотосессии...",
             parse_mode="HTML"
         )
-        await state.set_state(PhotoshootStates.waiting_for_confirmation)
+
+        res = await prompt_generator.generate_styles_from_product_info(
+            product_name=product_name,
+            product_description=product_description,
+            aspect_ratio=recommended_ratio,
+            random=False,
+            num_styles=4
+        )
+
+        if not res["success"]:
+            await msg.edit_text(
+                f"✅ Распознал: <b>{product_name}</b>\n\n"
+                f"❌ Ошибка создания стилей. Попробуйте снова или измените пропорции.",
+                reply_markup=get_initial_photo_keyboard(recommended_ratio),
+                parse_mode="HTML"
+            )
+            await state.set_state(PhotoshootStates.waiting_for_confirmation)
+            return
+
+        # Increment style generation counter
+        MAX_ATTEMPTS = 4
+        current_attempts = 0
+        new_attempts = current_attempts + 1
+        remaining = MAX_ATTEMPTS - new_attempts
+
+        await state.update_data(
+            styles=res["styles"],
+            style_generation_attempts=new_attempts
+        )
+
+        # Show style preview with choice
+        styles_text = "\n".join([
+            f"{i+1}. <b>{style['style_name']}</b>"
+            for i, style in enumerate(res["styles"])
+        ])
+
+        ratio_names = {
+            "1:1": "1:1 (квадрат)",
+            "9:16": "9:16 (вертикально)",
+            "16:9": "16:9 (горизонтально)",
+            "4:5": "4:5 (вертикально)"
+        }
+
+        preview_text = (
+            f"✨ <b>Готово!</b> Создано 4 варианта:\n\n"
+            f"📦 <b>Товар:</b> {product_name}\n"
+            f"📐 <b>Формат:</b> {ratio_names.get(recommended_ratio, recommended_ratio)}\n"
+            f"💎 <b>Баланс:</b> {user.images_remaining} генераций\n\n"
+            f"🎨 <b>Варианты стилей:</b>\n{styles_text}\n\n"
+            f"Выберите действие:"
+        )
+
+        await msg.edit_text(
+            preview_text,
+            reply_markup=get_style_choice_keyboard(res["styles"], product_name, remaining),
+            parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
     except Exception as e:
-        logger.error(f"Error in product detection: {e}", exc_info=True)
+        logger.error(f"Error in auto photo analysis: {e}", exc_info=True)
         await msg.edit_text("❌ Ошибка анализа. Попробуйте снова.")
 
 @router.callback_query(F.data.startswith("aspect_ratio:"))
@@ -484,7 +609,7 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
     # Extract ratio correctly: "aspect_ratio:16:9" -> "16:9"
     ratio = ":".join(callback.data.split(":")[1:])
 
-    # Just update aspect ratio - NO generation yet!
+    # Update aspect ratio
     await state.update_data(aspect_ratio=ratio)
 
     user = await get_or_create_user(session, callback.from_user.id)
@@ -496,18 +621,86 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
         "4:5": "вертикально для карточки"
     }
 
-    result_text = (
-        f"✅ Фото получено!\n"
-        f"📐 Пропорции: <b>{ratio}</b> ({ratio_names.get(ratio, 'стандарт')})\n\n"
-        f"💎 У вас: <b>{user.images_remaining}</b> генераций"
-    )
+    # Get current state to check if we need to regenerate styles
+    current_state = await state.get_state()
+    data = await state.get_data()
 
-    await callback.message.edit_text(
-        result_text,
-        reply_markup=get_initial_photo_keyboard(ratio),
-        parse_mode="HTML"
-    )
-    await state.set_state(PhotoshootStates.waiting_for_confirmation)
+    # If we are in reviewing_suggested_styles, regenerate styles with new ratio
+    if current_state == PhotoshootStates.reviewing_suggested_styles:
+        product_name = data.get("product_name", "Товар")
+        product_description = data.get("product_description", "Коммерческий продукт")
+
+        await callback.message.edit_text(
+            f"📐 Пропорции изменены на <b>{ratio}</b>\n\n"
+            f"✨ Пересоздаю стили для новых пропорций...",
+            parse_mode="HTML"
+        )
+
+        res = await prompt_generator.generate_styles_from_product_info(
+            product_name=product_name,
+            product_description=product_description,
+            aspect_ratio=ratio,
+            random=False,
+            num_styles=4
+        )
+
+        if not res["success"]:
+            await callback.message.edit_text(
+                f"❌ Ошибка создания стилей. Попробуйте снова.",
+                reply_markup=get_aspect_ratio_keyboard(),
+                parse_mode="HTML"
+            )
+            return
+
+        # Update styles with new ratio
+        await state.update_data(styles=res["styles"])
+
+        # Show updated style preview
+        styles_text = "\n".join([
+            f"{i+1}. <b>{style['style_name']}</b>"
+            for i, style in enumerate(res["styles"])
+        ])
+
+        ratio_names_short = {
+            "1:1": "1:1 (квадрат)",
+            "9:16": "9:16 (вертикально)",
+            "16:9": "16:9 (горизонтально)",
+            "4:5": "4:5 (вертикально)"
+        }
+
+        MAX_ATTEMPTS = 4
+        current_attempts = data.get("style_generation_attempts", 1)
+        remaining = MAX_ATTEMPTS - current_attempts
+
+        preview_text = (
+            f"✨ <b>Обновлено!</b> Стили для новых пропорций:\n\n"
+            f"📦 <b>Товар:</b> {product_name}\n"
+            f"📐 <b>Формат:</b> {ratio_names_short.get(ratio, ratio)}\n"
+            f"💎 <b>Баланс:</b> {user.images_remaining} генераций\n\n"
+            f"🎨 <b>Варианты стилей:</b>\n{styles_text}\n\n"
+            f"Выберите действие:"
+        )
+
+        await callback.message.edit_text(
+            preview_text,
+            reply_markup=get_style_choice_keyboard(res["styles"], product_name, remaining),
+            parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+    else:
+        # Just update aspect ratio - NO generation yet!
+        result_text = (
+            f"✅ Фото получено!\n"
+            f"📐 Пропорции: <b>{ratio}</b> ({ratio_names.get(ratio, 'стандарт')})\n\n"
+            f"💎 У вас: <b>{user.images_remaining}</b> генераций"
+        )
+
+        await callback.message.edit_text(
+            result_text,
+            reply_markup=get_initial_photo_keyboard(ratio),
+            parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.waiting_for_confirmation)
 
 @router.callback_query(F.data == "styles:analyze")
 async def analyze_styles(callback: CallbackQuery, state: FSMContext):
@@ -578,7 +771,7 @@ async def analyze_styles(callback: CallbackQuery, state: FSMContext):
         await state.set_state(PhotoshootStates.reviewing_suggested_styles)
 
 @router.callback_query(F.data == "styles:random")
-async def random_styles(callback: CallbackQuery, state: FSMContext):
+async def random_styles(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     await callback.answer()
     data = await state.get_data()
 
@@ -602,7 +795,7 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Информация о товаре не найдена. Начните сначала.")
         return
 
-    msg = await callback.message.edit_text("🎲 Генерирую случайные стили...")
+    await callback.message.edit_text("✨ Создаю новые варианты фотосессии...")
 
     # Generate random styles using Claude Sonnet (expensive!)
     res = await prompt_generator.generate_styles_from_product_info(
@@ -614,7 +807,7 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
     )
 
     if not res["success"]:
-        await msg.edit_text("❌ Ошибка генерации стилей.", reply_markup=get_style_selection_keyboard())
+        await callback.message.edit_text("❌ Ошибка генерации стилей.", reply_markup=get_style_selection_keyboard())
         return
 
     # Increment counter
@@ -624,23 +817,35 @@ async def random_styles(callback: CallbackQuery, state: FSMContext):
         style_generation_attempts=new_attempts
     )
 
-    # Show detected product info
-    product_type = data.get("product_type", "")
-    product_info = f"📦 {product_name}"
-    if product_type:
-        product_info = f"📦 {product_name} ({product_type})"
+    user = await get_or_create_user(session, callback.from_user.id)
 
-    # Format styles preview for new UX
-    styles_text = "\n\n".join([
+    # Format styles preview
+    styles_text = "\n".join([
         f"{i+1}. <b>{style['style_name']}</b>"
         for i, style in enumerate(res["styles"])
     ])
 
+    ratio_names = {
+        "1:1": "1:1 (квадрат)",
+        "9:16": "9:16 (вертикально)",
+        "16:9": "16:9 (горизонтально)",
+        "4:5": "4:5 (вертикально)"
+    }
+
     # Show remaining attempts
     remaining = MAX_ATTEMPTS - new_attempts
 
-    await msg.edit_text(
-        f"🎲 <b>Случайные стили:</b>\n{product_info}\n\n{styles_text}\n\nВыберите, что сделать дальше:",
+    preview_text = (
+        f"✨ <b>Готово!</b> Создано 4 новых варианта:\n\n"
+        f"📦 <b>Товар:</b> {product_name}\n"
+        f"📐 <b>Формат:</b> {ratio_names.get(aspect_ratio, aspect_ratio)}\n"
+        f"💎 <b>Баланс:</b> {user.images_remaining} генераций\n\n"
+        f"🎨 <b>Варианты стилей:</b>\n{styles_text}\n\n"
+        f"Выберите действие:"
+    )
+
+    await callback.message.edit_text(
+        preview_text,
         reply_markup=get_style_choice_keyboard(res["styles"], product_name, remaining),
         parse_mode="HTML"
     )
