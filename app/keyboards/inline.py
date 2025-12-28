@@ -20,7 +20,7 @@ def get_aspect_ratio_keyboard() -> InlineKeyboardMarkup:
     for ratio, label in ratios.items():
         builder.button(text=label, callback_data=f"aspect_ratio:{ratio}")
 
-    builder.button(text="◀️ Назад", callback_data="back_to_initial")
+    builder.button(text="◀️ Назад", callback_data="back_to_styles")
     builder.adjust(1)  # One button per row
     return builder.as_markup()
 
