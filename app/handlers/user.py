@@ -613,6 +613,7 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
     await state.update_data(aspect_ratio=ratio)
 
     user = await get_or_create_user(session, callback.from_user.id)
+    data = await state.get_data()
 
     ratio_names = {
         "1:1": "квадрат для Instagram",
@@ -621,44 +622,17 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
         "4:5": "вертикально для карточки"
     }
 
-    # Get current state to check if we need to regenerate styles
-    current_state = await state.get_state()
-    data = await state.get_data()
+    # Check if we have styles already (came from reviewing screen)
+    styles = data.get("styles", [])
 
-    # If we are in reviewing_suggested_styles, regenerate styles with new ratio
-    if current_state == PhotoshootStates.reviewing_suggested_styles:
+    if styles:
+        # We have styles, return to reviewing screen with updated ratio
+        # DO NOT regenerate styles, just update the ratio and go back
         product_name = data.get("product_name", "Товар")
-        product_description = data.get("product_description", "Коммерческий продукт")
 
-        await callback.message.edit_text(
-            f"📐 Пропорции изменены на <b>{ratio}</b>\n\n"
-            f"✨ Пересоздаю стили для новых пропорций...",
-            parse_mode="HTML"
-        )
-
-        res = await prompt_generator.generate_styles_from_product_info(
-            product_name=product_name,
-            product_description=product_description,
-            aspect_ratio=ratio,
-            random=False,
-            num_styles=4
-        )
-
-        if not res["success"]:
-            await callback.message.edit_text(
-                f"❌ Ошибка создания стилей. Попробуйте снова.",
-                reply_markup=get_aspect_ratio_keyboard(),
-                parse_mode="HTML"
-            )
-            return
-
-        # Update styles with new ratio
-        await state.update_data(styles=res["styles"])
-
-        # Show updated style preview
         styles_text = "\n".join([
             f"{i+1}. <b>{style['style_name']}</b>"
-            for i, style in enumerate(res["styles"])
+            for i, style in enumerate(styles)
         ])
 
         ratio_names_short = {
@@ -673,7 +647,7 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
         remaining = MAX_ATTEMPTS - current_attempts
 
         preview_text = (
-            f"✨ <b>Обновлено!</b> Стили для новых пропорций:\n\n"
+            f"✅ <b>Пропорции изменены!</b>\n\n"
             f"📦 <b>Товар:</b> {product_name}\n"
             f"📐 <b>Формат:</b> {ratio_names_short.get(ratio, ratio)}\n"
             f"💎 <b>Баланс:</b> {user.images_remaining} генераций\n\n"
@@ -683,12 +657,12 @@ async def select_aspect_ratio(callback: CallbackQuery, state: FSMContext, sessio
 
         await callback.message.edit_text(
             preview_text,
-            reply_markup=get_style_choice_keyboard(res["styles"], product_name, remaining),
+            reply_markup=get_style_choice_keyboard(styles, product_name, remaining),
             parse_mode="HTML"
         )
         await state.set_state(PhotoshootStates.reviewing_suggested_styles)
     else:
-        # Just update aspect ratio - NO generation yet!
+        # No styles yet, show initial confirmation screen
         result_text = (
             f"✅ Фото получено!\n"
             f"📐 Пропорции: <b>{ratio}</b> ({ratio_names.get(ratio, 'стандарт')})\n\n"
@@ -1392,26 +1366,82 @@ async def change_aspect_ratio_handler(callback: CallbackQuery, state: FSMContext
     )
     await state.set_state(PhotoshootStates.selecting_aspect_ratio)
 
-@router.callback_query(F.data == "back_to_initial")
-async def back_to_initial(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    """Go back to initial choice after analysis"""
+@router.callback_query(F.data == "back_to_styles")
+async def back_to_styles(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Go back to styles screen or initial screen depending on state"""
     await callback.answer()
     data = await state.get_data()
-
     user = await get_or_create_user(session, callback.from_user.id)
-    product_name = data.get("product_name", "Товар")
-    aspect_ratio = data.get("aspect_ratio", "1:1")
 
-    result_text = (
-        f"✅ Распознано: <b>{product_name}</b>\n"
-        f"📐 Рекомендую пропорции: <b>{aspect_ratio}</b> (квадрат для Instagram)\n"
-    )
+    # Check if we have styles
+    styles = data.get("styles", [])
 
-    await callback.message.edit_text(
-        result_text,
-        reply_markup=get_initial_photo_keyboard(aspect_ratio),
-        parse_mode="HTML"
-    )
+    if styles:
+        # Return to styles screen
+        product_name = data.get("product_name", "Товар")
+        aspect_ratio = data.get("aspect_ratio", "1:1")
+
+        styles_text = "\n".join([
+            f"{i+1}. <b>{style['style_name']}</b>"
+            for i, style in enumerate(styles)
+        ])
+
+        ratio_names = {
+            "1:1": "1:1 (квадрат)",
+            "9:16": "9:16 (вертикально)",
+            "16:9": "16:9 (горизонтально)",
+            "4:5": "4:5 (вертикально)"
+        }
+
+        MAX_ATTEMPTS = 4
+        current_attempts = data.get("style_generation_attempts", 1)
+        remaining = MAX_ATTEMPTS - current_attempts
+
+        preview_text = (
+            f"✨ <b>Готово!</b> Создано 4 варианта:\n\n"
+            f"📦 <b>Товар:</b> {product_name}\n"
+            f"📐 <b>Формат:</b> {ratio_names.get(aspect_ratio, aspect_ratio)}\n"
+            f"💎 <b>Баланс:</b> {user.images_remaining} генераций\n\n"
+            f"🎨 <b>Варианты стилей:</b>\n{styles_text}\n\n"
+            f"Выберите действие:"
+        )
+
+        await callback.message.edit_text(
+            preview_text,
+            reply_markup=get_style_choice_keyboard(styles, product_name, remaining),
+            parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.reviewing_suggested_styles)
+    else:
+        # No styles, go back to initial confirmation screen
+        product_name = data.get("product_name", "Товар")
+        aspect_ratio = data.get("aspect_ratio", "1:1")
+
+        ratio_names = {
+            "1:1": "квадрат для Instagram",
+            "9:16": "вертикально для Stories",
+            "16:9": "горизонтально для сайта",
+            "4:5": "вертикально для карточки"
+        }
+
+        result_text = (
+            f"✅ Фото получено!\n"
+            f"📐 Пропорции: <b>{aspect_ratio}</b> ({ratio_names.get(aspect_ratio, 'стандарт')})\n\n"
+            f"💎 У вас: <b>{user.images_remaining}</b> генераций"
+        )
+
+        await callback.message.edit_text(
+            result_text,
+            reply_markup=get_initial_photo_keyboard(aspect_ratio),
+            parse_mode="HTML"
+        )
+        await state.set_state(PhotoshootStates.waiting_for_confirmation)
+
+@router.callback_query(F.data == "back_to_initial")
+async def back_to_initial(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Go back to initial choice after analysis - deprecated, redirects to back_to_styles"""
+    # Redirect to the new handler
+    await back_to_styles(callback, state, session)
 
 @router.callback_query(F.data.startswith("generate_single_style:"))
 async def generate_single_style(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
