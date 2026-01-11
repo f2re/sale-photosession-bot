@@ -1638,7 +1638,7 @@ async def continue_same_style(callback: CallbackQuery, state: FSMContext, sessio
 @router.callback_query(F.data == "try_other_styles")
 async def try_other_styles(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """Generate new random styles"""
-    await random_styles(callback, state)
+    await random_styles(callback, state, session)
 
 @router.callback_query(F.data == "pick_favorite_style")
 async def pick_favorite_style(callback: CallbackQuery, state: FSMContext):

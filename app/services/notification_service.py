@@ -291,3 +291,61 @@ class NotificationService:
 
         except Exception as e:
             logger.error(f"Failed to send support reply notification to user {telegram_id}: {str(e)}")
+
+    @staticmethod
+    async def notify_admins_critical_error(
+        bot: Bot,
+        error_type: str,
+        error_message: str,
+        user_telegram_id: Optional[int] = None,
+        username: Optional[str] = None,
+        handler_name: Optional[str] = None,
+        traceback_info: Optional[str] = None
+    ):
+        """
+        Notify admins about critical bot error that requires immediate attention
+
+        Args:
+            bot: Bot instance
+            error_type: Type of error (e.g., TypeError, ValueError, etc.)
+            error_message: Error message
+            user_telegram_id: User telegram ID who triggered the error (optional)
+            username: User username (optional)
+            handler_name: Name of handler where error occurred (optional)
+            traceback_info: Traceback information (optional)
+        """
+        try:
+            # Truncate error message and traceback if too long
+            display_error = error_message[:500] + "..." if len(error_message) > 500 else error_message
+            display_traceback = traceback_info[:1000] + "..." if traceback_info and len(traceback_info) > 1000 else traceback_info
+
+            text = (
+                "🚨 <b>КРИТИЧЕСКАЯ ОШИБКА В БОТЕ!</b>\n\n"
+                "⚠️ Требуется срочное вмешательство!\n\n"
+                f"❌ <b>Тип ошибки:</b> {error_type}\n"
+            )
+
+            if handler_name:
+                text += f"📍 <b>Обработчик:</b> <code>{handler_name}</code>\n"
+
+            if user_telegram_id:
+                text += f"👤 <b>Пользователь:</b> @{username or 'Unknown'} (ID: {user_telegram_id})\n"
+
+            text += f"\n💥 <b>Сообщение об ошибке:</b>\n<code>{display_error}</code>\n"
+
+            if display_traceback:
+                text += f"\n📋 <b>Traceback:</b>\n<code>{display_traceback}</code>\n"
+
+            text += "\n<i>Пожалуйста, проверьте логи для полной информации.</i>"
+
+            # Send to all admins
+            for admin_id in settings.admin_ids_list:
+                try:
+                    await bot.send_message(admin_id, text, parse_mode="HTML")
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id} about critical error: {str(e)}")
+
+            logger.info(f"Critical error notification sent to admins: {error_type}")
+
+        except Exception as e:
+            logger.error(f"Failed to send critical error notification to admins: {str(e)}")
