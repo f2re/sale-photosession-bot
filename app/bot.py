@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import init_db
 from app.handlers import user, admin, payment, support, batch_processing, style_management, custom_styles
 from app.services.yandex_metrika import periodic_metrika_upload
-from app.middlewares import DbSessionMiddleware
+from app.middlewares import DbSessionMiddleware, ErrorHandlerMiddleware
 
 # Setup logging
 def setup_logging():
@@ -94,6 +94,8 @@ async def main():
     dp = Dispatcher(storage=storage)
 
     # Register middleware
+    # Error handler should be first to catch all errors
+    dp.update.middleware(ErrorHandlerMiddleware())
     dp.update.middleware(DbSessionMiddleware())
 
     # Register routers
