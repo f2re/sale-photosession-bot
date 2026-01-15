@@ -1661,14 +1661,22 @@ async def pick_favorite_style(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("favorite_style:"))
 async def favorite_style_selected(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     """User selected favorite style, generate 4 more of it"""
-    await callback.answer()
-
-    # Extract style index and reuse generate_single_style
+    # Extract style index
     style_index = int(callback.data.split(":")[1])
 
-    # Update callback data to match generate_single_style format
-    callback.data = f"generate_single_style:{style_index}"
-    await generate_single_style(callback, state, session, bot)
+    # Call the core generation logic directly
+    # We don't answer the callback here since generate_single_style will do it
+    # Create a mock callback object with the correct data format
+    from types import SimpleNamespace
+
+    # Clone the callback but with updated data
+    mock_callback = SimpleNamespace()
+    mock_callback.data = f"generate_single_style:{style_index}"
+    mock_callback.answer = callback.answer
+    mock_callback.message = callback.message
+    mock_callback.from_user = callback.from_user
+
+    await generate_single_style(mock_callback, state, session, bot)
 
 @router.callback_query(F.data == "check_balance")
 async def check_balance_callback(callback: CallbackQuery, session: AsyncSession):

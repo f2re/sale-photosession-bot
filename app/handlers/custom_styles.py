@@ -137,8 +137,18 @@ async def custom_style_count_select(callback: CallbackQuery, state: FSMContext):
     """Handle image count selection and generate custom styles"""
     count = int(callback.data.split(":")[1])
     await callback.answer()
-    
+
     data = await state.get_data()
+
+    # Validate required state data
+    if "custom_product_name" not in data or "custom_style_description" not in data:
+        await callback.message.edit_text(
+            "❌ Ошибка: данные не найдены. Пожалуйста, начните создание стиля заново.",
+            reply_markup=get_style_selection_keyboard()
+        )
+        await state.clear()
+        return
+
     product_name = data["custom_product_name"]
     style_desc = data["custom_style_description"]
     aspect_ratio = data.get("aspect_ratio", "1:1")
