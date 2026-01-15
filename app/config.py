@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # OpenRouter API (for prompt generation via Claude)
     OPENROUTER_API_KEY: str
     PROMPT_MODEL: str = "anthropic/claude-3.5-sonnet"  # For generating prompts
-    IMAGE_MODEL: str = "google/gemini-2.0-flash-001" # Using Gemini 2.0 Flash for image generation via OpenRouter/NanoBanana
+    IMAGE_MODEL: str = "google/gemini-2.0-flash-exp"  # Gemini 2.0 Flash Experimental with image generation support
     
     # YooKassa
     YOOKASSA_SHOP_ID: str
