@@ -4,11 +4,13 @@ NanoBanana Image Generation Service (via OpenRouter)
 import aiohttp
 import base64
 import logging
+import time
 from io import BytesIO
 from typing import Dict
 from PIL import Image
 
 from app.config import settings
+from app.utils.prompt_logger import PromptLogger
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +136,19 @@ class NanoBananaService:
                 "error": Optional[str]
             }
         """
+        start_time = time.time()
+        system_prompt = None
+        full_user_prompt = None
+        success = False
+        error_msg = None
+        image_size_kb = None
+        style_name = "unknown"
+
         try:
+            # Extract style name from prompt if it contains style_name pattern
+            # This is a simple heuristic
+            style_name = prompt[:50] if len(prompt) > 50 else prompt
+
             # Convert reference image to base64
             base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
 
@@ -174,6 +188,15 @@ class NanoBananaService:
                 "Only the photography context changes, never the product itself."
             )
 
+            full_user_prompt = (
+                f"Generate a professional product photograph based on this style description: {prompt}\n\n"
+                f"CRITICAL: Use the reference image as the EXACT product to photograph. "
+                f"DO NOT modify the product's shape, color, texture, or any details. "
+                f"The product must look IDENTICAL to the reference - only change the photography setup (angle, lighting, background, position). "
+                f"For handmade items, preserve all craft features and unique characteristics. "
+                f"Focus on professional composition and lighting while keeping the product unchanged."
+            )
+
             # Convert aspect ratio to format accepted by API (e.g., "1:1" -> "1:1")
             aspect_ratio_param = aspect_ratio if ":" in aspect_ratio else "1:1"
             logger.info(f"Using aspect_ratio for generation: {aspect_ratio_param} (original: {aspect_ratio})")
@@ -196,12 +219,7 @@ class NanoBananaService:
                         "content": [
                             {
                                 "type": "text",
-                                "text": f"Generate a professional product photograph based on this style description: {prompt}\n\n"
-                                        f"CRITICAL: Use the reference image as the EXACT product to photograph. "
-                                        f"DO NOT modify the product's shape, color, texture, or any details. "
-                                        f"The product must look IDENTICAL to the reference - only change the photography setup (angle, lighting, background, position). "
-                                        f"For handmade items, preserve all craft features and unique characteristics. "
-                                        f"Focus on professional composition and lighting while keeping the product unchanged."
+                                "text": full_user_prompt
                             },
                             {
                                 "type": "image_url",
@@ -247,7 +265,8 @@ class NanoBananaService:
 
                         choices = result.get('choices', [])
                         if not choices:
-                            return {"success": False, "image_bytes": None, "error": "No output from API"}
+                            error_msg = "No output from API"
+                            return {"success": False, "image_bytes": None, "error": error_msg}
 
                         message = choices[0].get('message', {})
                         images = message.get('images', [])
@@ -265,12 +284,16 @@ class NanoBananaService:
                                 try:
                                     base64_data = data_url.split(',', 1)[1]
                                     image_bytes = base64.b64decode(base64_data)
+                                    image_size_kb = len(image_bytes) / 1024
+                                    success = True
                                     return {"success": True, "image_bytes": image_bytes, "error": None}
                                 except Exception as e:
                                     logger.error(f"Failed to decode base64 image: {e}")
-                                    return {"success": False, "image_bytes": None, "error": f"Failed to decode image: {str(e)}"}
+                                    error_msg = f"Failed to decode image: {str(e)}"
+                                    return {"success": False, "image_bytes": None, "error": error_msg}
                             else:
-                                return {"success": False, "image_bytes": None, "error": "Invalid image data URL format"}
+                                error_msg = "Invalid image data URL format"
+                                return {"success": False, "image_bytes": None, "error": error_msg}
 
                         # No images in response
                         content = message.get('content', '')
@@ -279,16 +302,38 @@ class NanoBananaService:
 
                         # Translate error to Russian for user
                         russian_error = translate_api_error_to_russian(content)
+                        error_msg = russian_error
                         return {"success": False, "image_bytes": None, "error": russian_error}
 
                     else:
                         error_text = await response.text()
                         logger.error(f"API Error: {response.status} - {error_text}")
-                        return {"success": False, "image_bytes": None, "error": f"API Error: {response.status}"}
+                        error_msg = f"API Error: {response.status}"
+                        return {"success": False, "image_bytes": None, "error": error_msg}
 
         except Exception as e:
             logger.error(f"Generation error: {e}", exc_info=True)
-            return {"success": False, "image_bytes": None, "error": str(e)}
+            error_msg = str(e)
+            return {"success": False, "image_bytes": None, "error": error_msg}
+
+        finally:
+            # Log prompt and response for analytics
+            duration_ms = (time.time() - start_time) * 1000
+            try:
+                PromptLogger.log_image_generation(
+                    product_description="Product from reference image",
+                    style_name=style_name,
+                    style_prompt=prompt,
+                    aspect_ratio=aspect_ratio,
+                    system_prompt=system_prompt if system_prompt else "",
+                    full_user_prompt=full_user_prompt if full_user_prompt else "",
+                    success=success,
+                    error=error_msg,
+                    duration_ms=duration_ms,
+                    image_size_kb=image_size_kb
+                )
+            except Exception as log_err:
+                logger.error(f"Failed to log image generation prompt: {log_err}")
 
     async def test_connection(self) -> bool:
         # Simple test
