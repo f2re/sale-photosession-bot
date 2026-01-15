@@ -81,6 +81,7 @@ async def delete_style(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("rename_style:"))
 async def rename_init(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     pid = int(callback.data.split(":")[1])
     await state.update_data(renaming_preset_id=pid)
     await callback.message.answer("Введите новое название:")
@@ -99,6 +100,7 @@ async def rename_confirm(message: Message, state: FSMContext, session: AsyncSess
 @router.callback_query(F.data.startswith("change_aspect_ratio:"))
 async def change_aspect_ratio_init(callback: CallbackQuery, state: FSMContext):
     """Start changing aspect ratio for a style"""
+    await callback.answer()
     pid = int(callback.data.split(":")[1])
     await state.update_data(editing_preset_id=pid)
 
@@ -113,7 +115,6 @@ async def change_aspect_ratio_init(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_aspect_ratio_keyboard()
     )
     await state.set_state(StyleManagementStates.editing_aspect_ratio)
-    await callback.answer()
 
 @router.callback_query(F.data.startswith("aspect_ratio:"), StateFilter(StyleManagementStates.editing_aspect_ratio))
 async def change_aspect_ratio_confirm(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
