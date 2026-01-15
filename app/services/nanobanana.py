@@ -11,7 +11,7 @@ from PIL import Image
 
 from app.config import settings
 from app.utils.prompt_logger import PromptLogger
-
+from app.utils.api_retry import image_api_retry
 logger = logging.getLogger(__name__)
 
 
@@ -113,6 +113,51 @@ class NanoBananaService:
         self.model = settings.IMAGE_MODEL # e.g., google/gemini-2.0-flash-001 or similar capable of image output
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
 
+    async def _make_generation_request(self, payload: dict, headers: dict) -> dict:
+        """
+        Make generation API request - used by retry handler.
+
+        Args:
+            payload: API request payload
+            headers: Request headers
+
+        Returns:
+            API response dictionary
+
+        Raises:
+            aiohttp.ClientError: On API errors
+        """
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.base_url,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=120)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+
+                    # Validate response has images
+                    choices = result.get('choices', [])
+                    if not choices:
+                        raise aiohttp.ClientError("No choices in API response")
+
+                    message = choices[0].get('message', {})
+                    images = message.get('images', [])
+
+                    if not images:
+                        # Get content for error analysis
+                        content = message.get('content', '')
+                        logger.error(f"No images in response. Content: ```\n{content[:500]}\n```")
+                        raise aiohttp.ClientError(f"No images generated. API response: {content[:200]}")
+
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"API Error: {response.status} - {error_text}")
+                    raise aiohttp.ClientError(f"API returned status {response.status}: {error_text[:200]}")
+
+
     async def generate_image(
         self,
         prompt: str,
@@ -146,7 +191,6 @@ class NanoBananaService:
 
         try:
             # Extract style name from prompt if it contains style_name pattern
-            # This is a simple heuristic
             style_name = prompt[:50] if len(prompt) > 50 else prompt
 
             # Convert reference image to base64
@@ -160,7 +204,7 @@ class NanoBananaService:
             except:
                 mime_type = "image/jpeg"
 
-            # Prepare request
+            # Prepare request headers
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -197,17 +241,16 @@ class NanoBananaService:
                 f"Focus on professional composition and lighting while keeping the product unchanged."
             )
 
-            # Convert aspect ratio to format accepted by API (e.g., "1:1" -> "1:1")
+            # Convert aspect ratio to format accepted by API
             aspect_ratio_param = aspect_ratio if ":" in aspect_ratio else "1:1"
             logger.info(f"Using aspect_ratio for generation: {aspect_ratio_param} (original: {aspect_ratio})")
 
             # Payload for chat completion with image output
-            # Using image_config for Gemini 2.5 Flash as per OpenRouter documentation
             payload = {
                 "model": self.model,
-                "modalities": ["text", "image"],  # Required for image generation
+                "modalities": ["text", "image"],
                 "image_config": {
-                    "aspect_ratio": aspect_ratio_param  # Correct parameter structure for Gemini
+                    "aspect_ratio": aspect_ratio_param
                 },
                 "messages": [
                     {
@@ -233,88 +276,50 @@ class NanoBananaService:
             }
 
             logger.info(f"Sending generation request to {self.model}...")
-            logger.debug(payload)
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.base_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=120)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
+            # Use retry mechanism for resilient API calls
+            result = await image_api_retry.execute_with_retry(
+                self._make_generation_request,
+                payload,
+                headers
+            )
 
-                        # Extract image from response
-                        # OpenRouter returns images in the message.images field
-                        # Response format:
-                        # {
-                        #   "choices": [{
-                        #     "message": {
-                        #       "role": "assistant",
-                        #       "content": "...",
-                        #       "images": [{
-                        #         "type": "image_url",
-                        #         "image_url": {
-                        #           "url": "data:image/png;base64,..."
-                        #         }
-                        #       }]
-                        #     }
-                        #   }]
-                        # }
+            # Extract image from response (validation already done in _make_generation_request)
+            message = result['choices'][0]['message']
+            images = message['images']
+            first_image = images[0]
+            image_url_obj = first_image.get('image_url', {})
+            data_url = image_url_obj.get('url', '')
 
-                        choices = result.get('choices', [])
-                        if not choices:
-                            error_msg = "No output from API"
-                            return {"success": False, "image_bytes": None, "error": error_msg}
-
-                        message = choices[0].get('message', {})
-                        images = message.get('images', [])
-
-                        # Check if we have images in the response
-                        if images and len(images) > 0:
-                            # Extract the first image
-                            first_image = images[0]
-                            image_url_obj = first_image.get('image_url', {})
-                            data_url = image_url_obj.get('url', '')
-
-                            # data_url format: "data:image/png;base64,iVBORw0KGgo..."
-                            if data_url.startswith('data:image/'):
-                                # Extract base64 data after the comma
-                                try:
-                                    base64_data = data_url.split(',', 1)[1]
-                                    image_bytes = base64.b64decode(base64_data)
-                                    image_size_kb = len(image_bytes) / 1024
-                                    success = True
-                                    return {"success": True, "image_bytes": image_bytes, "error": None}
-                                except Exception as e:
-                                    logger.error(f"Failed to decode base64 image: {e}")
-                                    error_msg = f"Failed to decode image: {str(e)}"
-                                    return {"success": False, "image_bytes": None, "error": error_msg}
-                            else:
-                                error_msg = "Invalid image data URL format"
-                                return {"success": False, "image_bytes": None, "error": error_msg}
-
-                        # No images in response
-                        content = message.get('content', '')
-                        logger.error(f"No images in response. Content: {content[:200]}")
-                        logger.debug(f"Full response: {result}")
-
-                        # Translate error to Russian for user
-                        russian_error = translate_api_error_to_russian(content)
-                        error_msg = russian_error
-                        return {"success": False, "image_bytes": None, "error": russian_error}
-
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"API Error: {response.status} - {error_text}")
-                        error_msg = f"API Error: {response.status}"
-                        return {"success": False, "image_bytes": None, "error": error_msg}
+            # Extract base64 data and decode
+            if data_url.startswith('data:image/'):
+                try:
+                    base64_data = data_url.split(',', 1)[1]
+                    image_bytes = base64.b64decode(base64_data)
+                    image_size_kb = len(image_bytes) / 1024
+                    success = True
+                    logger.info(f"Successfully generated image: {image_size_kb:.1f} KB")
+                    return {"success": True, "image_bytes": image_bytes, "error": None}
+                except Exception as e:
+                    logger.error(f"Failed to decode base64 image: {e}")
+                    error_msg = f"Failed to decode image: {str(e)}"
+                    return {"success": False, "image_bytes": None, "error": error_msg}
+            else:
+                error_msg = "Invalid image data URL format"
+                logger.error(error_msg)
+                return {"success": False, "image_bytes": None, "error": error_msg}
 
         except Exception as e:
             logger.error(f"Generation error: {e}", exc_info=True)
             error_msg = str(e)
-            return {"success": False, "image_bytes": None, "error": error_msg}
+
+            # Translate API errors to user-friendly Russian messages
+            if "No images generated" in error_msg or "No choices" in error_msg:
+                russian_error = translate_api_error_to_russian("No images in response")
+            else:
+                russian_error = translate_api_error_to_russian(error_msg)
+
+            return {"success": False, "image_bytes": None, "error": russian_error}
 
         finally:
             # Log prompt and response for analytics
@@ -334,6 +339,7 @@ class NanoBananaService:
                 )
             except Exception as log_err:
                 logger.error(f"Failed to log image generation prompt: {log_err}")
+
 
     async def test_connection(self) -> bool:
         # Simple test

@@ -20,19 +20,15 @@ prompt_log_file = logs_dir / "prompts.jsonl"
 file_handler = logging.FileHandler(prompt_log_file, encoding='utf-8')
 file_handler.setLevel(logging.INFO)
 
-# Console handler for debugging
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-
-# Formatters
-file_formatter = logging.Formatter('%(message)s')  # JSON only
-console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
+# Formatter - JSON only, no timestamps (already in JSON)
+file_formatter = logging.Formatter('%(message)s')
 file_handler.setFormatter(file_formatter)
-console_handler.setFormatter(console_formatter)
 
+# Only file handler - no console output to avoid duplication
 prompt_logger.addHandler(file_handler)
-prompt_logger.addHandler(console_handler)
+
+# Prevent propagation to root logger
+prompt_logger.propagate = False
 
 
 class PromptLogger:
