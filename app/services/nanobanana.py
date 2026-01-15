@@ -156,10 +156,22 @@ class NanoBananaService:
 
             # Construct system prompt for image generation
             system_prompt = (
-                "You are an advanced AI photographer. "
+                "You are an advanced AI photographer specializing in product photography. "
                 "Generate a photorealistic product image based on the user's prompt and the provided reference image. "
-                "Maintain the product's identity and key features strictly. "
-                "Follow the requested style, lighting, and composition."
+                "\n\nCRITICAL REQUIREMENTS - PRODUCT PRESERVATION:\n"
+                "- PRESERVE the product's EXACT shape, form, and proportions\n"
+                "- PRESERVE the product's EXACT colors, tones, and color palette\n"
+                "- PRESERVE the product's EXACT texture, materials, and surface details\n"
+                "- PRESERVE all unique features, labels, decorations, and craftsmanship\n"
+                "- For handmade items: maintain ALL craft details, imperfections, and authentic character\n"
+                "\nWHAT YOU CAN CHANGE:\n"
+                "- Camera angle and perspective\n"
+                "- Lighting direction, intensity, and quality\n"
+                "- Background and environment\n"
+                "- Product position and placement\n"
+                "- Surrounding props and elements\n"
+                "\nThe product must remain recognizable and identical to the reference image. "
+                "Only the photography context changes, never the product itself."
             )
 
             # Convert aspect ratio to format accepted by API (e.g., "1:1" -> "1:1")
@@ -184,9 +196,12 @@ class NanoBananaService:
                         "content": [
                             {
                                 "type": "text",
-                                "text": f"Generate an image of this product based on this description: {prompt}. "
-                                        f"Keep the product look consistent with the reference. "
-                                        f"Maintain high quality and professional composition."
+                                "text": f"Generate a professional product photograph based on this style description: {prompt}\n\n"
+                                        f"CRITICAL: Use the reference image as the EXACT product to photograph. "
+                                        f"DO NOT modify the product's shape, color, texture, or any details. "
+                                        f"The product must look IDENTICAL to the reference - only change the photography setup (angle, lighting, background, position). "
+                                        f"For handmade items, preserve all craft features and unique characteristics. "
+                                        f"Focus on professional composition and lighting while keeping the product unchanged."
                             },
                             {
                                 "type": "image_url",
