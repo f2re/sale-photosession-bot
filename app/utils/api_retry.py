@@ -193,7 +193,7 @@ class APIRetryHandler:
 prompt_api_retry = APIRetryHandler(
     max_retries=2,
     base_delay=2.0,
-    timeout_base=15.0,
+    timeout_base=30.0,  # Claude prompt generation needs more time
     circuit_failure_threshold=5,
     circuit_timeout=60.0
 )
@@ -209,7 +209,7 @@ image_api_retry = APIRetryHandler(
 vision_api_retry = APIRetryHandler(
     max_retries=2,
     base_delay=1.5,
-    timeout_base=15.0,
+    timeout_base=25.0,  # Vision API needs more time for analysis
     circuit_failure_threshold=5,
     circuit_timeout=60.0
 )

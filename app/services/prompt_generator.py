@@ -6,10 +6,12 @@ import logging
 import aiohttp
 import json
 import re
+import time
 from typing import Dict, List, Optional
 from app.config import settings
 from app.services.product_detector import ProductDetector
 from app.utils.api_retry import prompt_api_retry
+from app.utils.prompt_logger import PromptLogger
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,9 @@ class PromptGenerator:
 4. Validate: All ratings ≥8/10
 
 **Core Formula:**
-[Macro shot] of [product] on [scent-aligned surface]. [2-3 elements: "a few", "scattered"]. [Lighting: dappled/golden hour/soft]. Shot with [lens], f/2.8-4.0, shallow DoF, bokeh. Moody aesthetic.
+[Macro shot] of [product - PRESERVE original shape, color, texture, details] on [scent-aligned surface]. [2-3 elements: "a few", "scattered"]. [Lighting: dappled/golden hour/soft]. Shot with [lens], f/2.8-4.0, shallow DoF, bokeh. Moody aesthetic.
+
+**CRITICAL: Keep product unchanged - ONLY alter angle, lighting, background, position. For handmade items, preserve all unique craft features.**
 
 **⚡ Time Estimates:**
 - Single prompt: 30-60 sec analysis + 15-45 sec generation
@@ -69,7 +73,8 @@ class PromptGenerator:
 - **Lighting**: Specify source (dappled sunlight, golden hour, window light) + shadow type
 - **Technical**: Camera lens (85mm f/1.8 warm | 100mm macro f/2.8 cool | 50mm f/1.4 dramatic)
 - **Atmosphere**: Optional effects (mist, condensation, frost, droplets)
-- **Negative prompt**: "Avoid: clutter, studio lights, multiple products, artificial props"
+- **Product Preservation (CRITICAL)**: PRESERVE product's exact form, shape, color, texture, and all unique details. ONLY change: camera angle, lighting direction, background, and product position. For handmade items, maintain all craft details, imperfections, and authentic character.
+- **Negative prompt**: "Avoid: clutter, studio lights, multiple products, artificial props, altered product shape, changed colors, modified textures"
 
 **Camera shortcuts:**
 - Cozy/intimate → 85mm f/1.8, warm tones
@@ -146,7 +151,7 @@ class PromptGenerator:
 ```
 {
     "style_name": "Тёплый мох",
-    "prompt": "Macro shot of amber candle jar on dense green sphagnum moss. Single warm sunray illuminates jar, soft shadows on moss. Dark forest floor bokeh background. Water droplets on moss catching light. Shot with 85mm f/1.8, shallow DoF, warm grading, cinematic mood.",
+    "prompt": "Macro shot of amber candle jar on dense green sphagnum moss. PRESERVE jar's exact amber color, cylindrical shape, and all label details unchanged. Single warm sunray illuminates jar from side, soft shadows on moss. Dark forest floor bokeh background. Water droplets on moss catching light. Shot with 85mm f/1.8, shallow DoF, warm grading, cinematic mood.",
     "tech": "85mm f/1.8 | Golden hour side light | Warm white balance",
     "logic": "Directional warmth highlights moss texture and amber jar, creating enveloping atmosphere that mirrors scent's earthy warmth",
     "score": "Realism 9/10 | Minimalism 10/10 | Mood 9/10"
@@ -167,7 +172,7 @@ class PromptGenerator:
     },
     {
         "style_name": "Берёза и клюква",
-        "prompt": "Close-up of glass serum bottle on weathered birch bark. Three fresh cranberries with droplets scattered on dark moss. Soft diffused morning light, dappled shadows. Cool Nordic palette. Shot with 100mm macro f/2.8, f/3.5, birch tree bokeh.",
+        "prompt": "Close-up of glass serum bottle on weathered birch bark. PRESERVE bottle's exact glass transparency, shape, and label design unchanged. Three fresh cranberries with droplets scattered on dark moss. Soft diffused morning light, dappled shadows. Cool Nordic palette. Shot with 100mm macro f/2.8, f/3.5, birch tree bokeh.",
         "tech": "100mm macro f/2.8-3.5 | Overcast diffused light | Cool white balance",
         "logic": "Birch bark surface with sparse cranberries evokes Nordic freshness and minimalist Scandinavian aesthetic matching scent profile",
         "score": "Realism 9/10 | Minimalism 9/10 | Mood 9/10"
@@ -222,7 +227,9 @@ Be maximally creative! Use different:
 4. Validate: All ratings ≥8/10
 
 **Core Formula:**
-[Macro shot] of [product] on [scent-aligned surface]. [2-3 elements: "a few", "scattered"]. [Lighting: dappled/golden hour/soft]. Shot with [lens], f/2.8-4.0, shallow DoF, bokeh. Moody aesthetic.
+[Macro shot] of [product - PRESERVE original shape, color, texture, details] on [scent-aligned surface]. [2-3 elements: "a few", "scattered"]. [Lighting: dappled/golden hour/soft]. Shot with [lens], f/2.8-4.0, shallow DoF, bokeh. Moody aesthetic.
+
+**CRITICAL: Keep product unchanged - ONLY alter angle, lighting, background, position. For handmade items, preserve all unique craft features.**
 
 **⚡ Time Estimates:**
 - Single prompt: 30-60 sec analysis + 15-45 sec generation
@@ -260,7 +267,8 @@ Be maximally creative! Use different:
 - **Lighting**: Specify source (dappled sunlight, golden hour, window light) + shadow type
 - **Technical**: Camera lens (85mm f/1.8 warm | 100mm macro f/2.8 cool | 50mm f/1.4 dramatic)
 - **Atmosphere**: Optional effects (mist, condensation, frost, droplets)
-- **Negative prompt**: "Avoid: clutter, studio lights, multiple products, artificial props"
+- **Product Preservation (CRITICAL)**: PRESERVE product's exact form, shape, color, texture, and all unique details. ONLY change: camera angle, lighting direction, background, and product position. For handmade items, maintain all craft details, imperfections, and authentic character.
+- **Negative prompt**: "Avoid: clutter, studio lights, multiple products, artificial props, altered product shape, changed colors, modified textures"
 
 **Camera shortcuts:**
 - Cozy/intimate → 85mm f/1.8, warm tones
@@ -337,7 +345,7 @@ Be maximally creative! Use different:
 ```
 {
     "style_name": "Тёплый мох",
-    "prompt": "Macro shot of amber candle jar on dense green sphagnum moss. Single warm sunray illuminates jar, soft shadows on moss. Dark forest floor bokeh background. Water droplets on moss catching light. Shot with 85mm f/1.8, shallow DoF, warm grading, cinematic mood.",
+    "prompt": "Macro shot of amber candle jar on dense green sphagnum moss. PRESERVE jar's exact amber color, cylindrical shape, and all label details unchanged. Single warm sunray illuminates jar from side, soft shadows on moss. Dark forest floor bokeh background. Water droplets on moss catching light. Shot with 85mm f/1.8, shallow DoF, warm grading, cinematic mood.",
     "tech": "85mm f/1.8 | Golden hour side light | Warm white balance",
     "logic": "Directional warmth highlights moss texture and amber jar, creating enveloping atmosphere that mirrors scent's earthy warmth",
     "score": "Realism 9/10 | Minimalism 10/10 | Mood 9/10"
@@ -358,7 +366,7 @@ Be maximally creative! Use different:
     },
     {
         "style_name": "Берёза и клюква",
-        "prompt": "Close-up of glass serum bottle on weathered birch bark. Three fresh cranberries with droplets scattered on dark moss. Soft diffused morning light, dappled shadows. Cool Nordic palette. Shot with 100mm macro f/2.8, f/3.5, birch tree bokeh.",
+        "prompt": "Close-up of glass serum bottle on weathered birch bark. PRESERVE bottle's exact glass transparency, shape, and label design unchanged. Three fresh cranberries with droplets scattered on dark moss. Soft diffused morning light, dappled shadows. Cool Nordic palette. Shot with 100mm macro f/2.8, f/3.5, birch tree bokeh.",
         "tech": "100mm macro f/2.8-3.5 | Overcast diffused light | Cool white balance",
         "logic": "Birch bark surface with sparse cranberries evokes Nordic freshness and minimalist Scandinavian aesthetic matching scent profile",
         "score": "Realism 9/10 | Minimalism 9/10 | Mood 9/10"
@@ -477,6 +485,13 @@ Be maximally creative! Use different:
                 "error": Optional[str]
             }
         """
+        start_time = time.time()
+        system_prompt_used = None
+        user_prompt = None
+        response_data = None
+        success = False
+        error_msg = None
+
         try:
             # Handle generic description
             product_text = product_description
@@ -498,12 +513,14 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
                 "X-Title": "Product Photoshoot Bot"
             }
 
+            system_prompt_used = self.RANDOM_STYLES_PROMPT if random else self.SYSTEM_PROMPT
+
             payload = {
                 "model": self.model,
                 "messages": [
                     {
                         "role": "system",
-                        "content": self.RANDOM_STYLES_PROMPT if random else self.SYSTEM_PROMPT
+                        "content": system_prompt_used
                     },
                     {
                         "role": "user",
@@ -544,22 +561,49 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
 
                 logger.info(f"Successfully generated styles for: {data.get('product_name', 'unknown')}")
 
-                return {
+                success = True
+                response_data = {
                     "success": True,
                     "product_name": data["product_name"],
                     "styles": data["styles"],
                     "error": None
                 }
 
+                return response_data
+
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON response: {e}")
                 logger.debug(f"Response content: {content}")
                 logger.warning("Using fallback prompts")
-                return self._fallback_response(product_description, aspect_ratio)
+                error_msg = f"JSON parse error: {str(e)}"
+                response_data = self._fallback_response(product_description, aspect_ratio)
+                return response_data
 
         except Exception as e:
             logger.error(f"Error generating styles: {e}", exc_info=True)
-            return self._fallback_response(product_description, aspect_ratio)
+            error_msg = str(e)
+            response_data = self._fallback_response(product_description, aspect_ratio)
+            return response_data
+
+        finally:
+            # Log prompt and response for analytics
+            duration_ms = (time.time() - start_time) * 1000
+            try:
+                PromptLogger.log_style_generation(
+                    operation_type="random_styles" if random else "analyzed_styles",
+                    product_description=product_description,
+                    aspect_ratio=aspect_ratio,
+                    random=random,
+                    num_styles=num_styles,
+                    system_prompt=system_prompt_used if system_prompt_used else "",
+                    user_prompt=user_prompt if user_prompt else "",
+                    response=response_data,
+                    success=success,
+                    error=error_msg,
+                    duration_ms=duration_ms
+                )
+            except Exception as log_err:
+                logger.error(f"Failed to log prompt: {log_err}")
 
     async def generate_styles_from_product_info(
         self,
@@ -628,6 +672,12 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
                 "error": Optional[str]
             }
         """
+        start_time = time.time()
+        user_prompt = None
+        response_data = None
+        success = False
+        error_msg = None
+
         try:
             logger.info(f"Generating {num_variations} variations of style: {base_style.get('style_name')}")
 
@@ -687,42 +737,70 @@ Return result STRICTLY in JSON format with exactly {num_variations} style variat
 
                 if not self._validate_response(data, num_variations):
                     logger.warning(f"Invalid JSON structure for variations")
+                    error_msg = "Invalid JSON structure"
                     # Fallback: use base style duplicated
-                    return {
+                    response_data = {
                         "success": True,
                         "product_name": product_name,
                         "styles": [base_style] * num_variations,
                         "error": None
                     }
+                    return response_data
 
                 logger.info(f"Successfully generated {len(data['styles'])} style variations")
 
-                return {
+                success = True
+                response_data = {
                     "success": True,
                     "product_name": data.get("product_name", product_name),
                     "styles": data["styles"][:num_variations],
                     "error": None
                 }
+                return response_data
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse variation JSON: {e}")
+                error_msg = f"JSON parse error: {str(e)}"
                 # Fallback: use base style duplicated
-                return {
+                response_data = {
                     "success": True,
                     "product_name": product_name,
                     "styles": [base_style] * num_variations,
                     "error": None
                 }
+                return response_data
 
         except Exception as e:
             logger.error(f"Error generating style variations: {e}", exc_info=True)
+            error_msg = str(e)
             # Fallback: use base style duplicated
-            return {
+            response_data = {
                 "success": True,
                 "product_name": product_name,
                 "styles": [base_style] * num_variations,
                 "error": None
             }
+            return response_data
+
+        finally:
+            # Log prompt and response for analytics
+            duration_ms = (time.time() - start_time) * 1000
+            try:
+                PromptLogger.log_style_variation(
+                    base_style_name=base_style.get('style_name', ''),
+                    base_style_prompt=base_style.get('prompt', ''),
+                    product_description=product_description,
+                    aspect_ratio=aspect_ratio,
+                    num_variations=num_variations,
+                    system_prompt=self.SYSTEM_PROMPT,
+                    user_prompt=user_prompt if user_prompt else "",
+                    response=response_data,
+                    success=success,
+                    error=error_msg,
+                    duration_ms=duration_ms
+                )
+            except Exception as log_err:
+                logger.error(f"Failed to log prompt: {log_err}")
 
     async def generate_styles_with_vision(
         self,
@@ -845,28 +923,28 @@ Return result STRICTLY in JSON format with exactly {num_variations} style variat
             "styles": [
                 {
                     "style_name": "Lifestyle",
-                    "prompt": f"Professional lifestyle product photography of {product}, in use by person, natural environment, warm natural lighting, candid moment, aspect ratio {aspect_ratio}, shot on Canon EOS R5, 50mm f/1.8, shallow depth of field, authentic feel, high-end commercial quality",
+                    "prompt": f"Professional lifestyle product photography of {product}. PRESERVE product's exact shape, color, texture, and all details unchanged. Natural environment, warm natural lighting, candid moment, aspect ratio {aspect_ratio}, shot on Canon EOS R5, 50mm f/1.8, shallow depth of field, authentic feel, high-end commercial quality. Only vary: angle, lighting, background.",
                     "tech": "Canon EOS R5, 50mm f/1.8 | Warm natural lighting",
                     "logic": "Creates an authentic, relatable atmosphere for the product.",
                     "score": "Realism 9/10 | Minimalism 8/10 | Mood 9/10"
                 },
                 {
                     "style_name": "Студийная",
-                    "prompt": f"Clean studio product shot of {product}, pure white background, professional studio lighting setup with softboxes, sharp focus on every detail, ultra high resolution 8k, aspect ratio {aspect_ratio}, Sony A7IV, 85mm f/1.4 macro, minimal shadows, e-commerce photography, product catalog quality",
+                    "prompt": f"Clean studio product shot of {product}. PRESERVE product's exact shape, color, texture, and all details unchanged. Pure white background, professional studio lighting setup with softboxes, sharp focus on every detail, ultra high resolution 8k, aspect ratio {aspect_ratio}, Sony A7IV, 85mm f/1.4 macro, minimal shadows, e-commerce photography, product catalog quality. Only vary: angle, lighting.",
                     "tech": "Sony A7IV, 85mm f/1.4 macro | Softbox studio lighting",
                     "logic": "Focuses entirely on product details and clarity for e-commerce.",
                     "score": "Realism 10/10 | Minimalism 10/10 | Mood 7/10"
                 },
                 {
                     "style_name": "Интерьер",
-                    "prompt": f"Product {product} elegantly placed in modern minimalist interior, natural window light creating soft shadows, contemporary home setting, aspect ratio {aspect_ratio}, architectural photography style, Fujifilm GFX 100S, 35mm f/2, ambient atmosphere, lifestyle magazine quality",
+                    "prompt": f"Product {product} elegantly placed in modern minimalist interior. PRESERVE product's exact shape, color, texture, and all details unchanged. Natural window light creating soft shadows, contemporary home setting, aspect ratio {aspect_ratio}, architectural photography style, Fujifilm GFX 100S, 35mm f/2, ambient atmosphere, lifestyle magazine quality. Only vary: angle, lighting, interior background.",
                     "tech": "Fujifilm GFX 100S, 35mm f/2 | Natural window light",
                     "logic": "Places product in a desirable, modern home context.",
                     "score": "Realism 9/10 | Minimalism 9/10 | Mood 8/10"
                 },
                 {
                     "style_name": "Креативная",
-                    "prompt": f"Creative conceptual photography of {product}, artistic composition with dynamic angles, vibrant color palette, dramatic studio lighting, aspect ratio {aspect_ratio}, fashion editorial style, Phase One XF, 80mm f/2.8, cinematic mood, advertising campaign quality, bold visual statement",
+                    "prompt": f"Creative conceptual photography of {product}. PRESERVE product's exact shape, color, texture, and all details unchanged. Artistic composition with dynamic angles, vibrant color palette, dramatic studio lighting, aspect ratio {aspect_ratio}, fashion editorial style, Phase One XF, 80mm f/2.8, cinematic mood, advertising campaign quality, bold visual statement. Only vary: camera angle, lighting direction, background.",
                     "tech": "Phase One XF, 80mm f/2.8 | Dramatic studio lighting",
                     "logic": "Eye-catching and memorable visual statement for advertising.",
                     "score": "Realism 8/10 | Minimalism 7/10 | Mood 10/10"
