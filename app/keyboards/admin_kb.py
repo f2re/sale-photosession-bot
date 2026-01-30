@@ -6,6 +6,7 @@ def get_admin_menu() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="👥 Статистика пользователей", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="👤 Статистика по ID", callback_data="admin_user_stats_search")],
             [InlineKeyboardButton(text="📦 Заказы", callback_data="admin_orders")],
             [InlineKeyboardButton(text="💬 Обращения в поддержку", callback_data="admin_support")],
             [InlineKeyboardButton(text="📊 UTM Статистика", callback_data="admin_utm_menu")],

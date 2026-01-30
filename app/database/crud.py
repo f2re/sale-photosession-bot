@@ -1044,3 +1044,62 @@ async def rollback_balance(session: AsyncSession, telegram_id: int, is_free: boo
     if user:
         user.images_remaining += 1
         await session.commit()
+
+
+async def get_full_user_statistics(session: AsyncSession, telegram_id: int) -> dict:
+    """
+    Get full detailed statistics for a specific user.
+    """
+    # 1. Get User Info
+    result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return None
+
+    # 2. Get Usage Stats (Free vs Paid)
+    # Note: ProcessedImage.is_free is the flag
+    usage_stmt = select(
+        func.count(case((ProcessedImage.is_free == True, 1))).label('free_used'),
+        func.count(case((ProcessedImage.is_free == False, 1))).label('paid_used')
+    ).where(ProcessedImage.user_id == user.id)
+
+    usage_result = await session.execute(usage_stmt)
+    usage_row = usage_result.one()
+    
+    free_used = usage_row.free_used or 0
+    paid_used = usage_row.paid_used or 0
+
+    # 3. Get Order History (Paid Packages)
+    # Orders with amount > 0 and status = 'paid'
+    orders_stmt = select(Order).options(selectinload(Order.package)).where(
+        Order.user_id == user.id,
+        Order.status == 'paid',
+        Order.amount > 0
+    ).order_by(Order.paid_at.desc())
+    
+    orders_result = await session.execute(orders_stmt)
+    paid_orders = orders_result.scalars().all()
+
+    # 4. Get Manual Accruals
+    # Orders with amount == 0 and status = 'paid' (created by admin)
+    manual_stmt = select(Order).options(selectinload(Order.package)).where(
+        Order.user_id == user.id,
+        Order.status == 'paid',
+        Order.amount == 0
+    ).order_by(Order.paid_at.desc())
+    
+    manual_result = await session.execute(manual_stmt)
+    manual_accruals = manual_result.scalars().all()
+
+    return {
+        "user": user,
+        "free_used": free_used,
+        "paid_used": paid_used,
+        "total_used": free_used + paid_used,
+        "orders": paid_orders,
+        "manual_accruals": manual_accruals
+    }
+

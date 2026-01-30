@@ -12,7 +12,7 @@ from app.database.crud import (
     add_support_message, get_utm_statistics, get_conversion_funnel,
     get_utm_events_summary, get_utm_sync_status,
     get_all_orders, get_order_by_id, cancel_order, refund_order,
-    get_orders_count, mark_order_paid
+    get_orders_count, mark_order_paid, get_full_user_statistics
 )
 from app.services.notification_service import NotificationService
 from app.services.yandex_metrika import metrika_service
@@ -34,6 +34,7 @@ class AdminStates(StatesGroup):
     waiting_for_refund_order_id = State()
     waiting_for_message_user_id = State()
     waiting_for_message_text = State()
+    waiting_for_stats_user_id = State()
 
 
 @router.message(Command("admin"))
@@ -109,6 +110,96 @@ async def admin_stats(callback: CallbackQuery):
 
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_admin_back())
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_user_stats_search")
+@admin_only
+async def admin_user_stats_search(callback: CallbackQuery, state: FSMContext):
+    """Start user stats search"""
+    await state.set_state(AdminStates.waiting_for_stats_user_id)
+    await callback.message.edit_text(
+        "👤 <b>Статистика пользователя</b>\n\n"
+        "Введите Telegram ID пользователя для просмотра статистики:",
+        parse_mode="HTML",
+        reply_markup=get_admin_cancel()
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_stats_user_id, F.text)
+@admin_only
+async def admin_user_stats_view(message: Message, state: FSMContext):
+    """Show user statistics by ID"""
+    try:
+        user_id = int(message.text)
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Введите число.")
+        return
+
+    db = get_db()
+    async with db.get_session() as session:
+        stats = await get_full_user_statistics(session, user_id)
+
+    if not stats:
+        await message.answer(
+            f"❌ Пользователь с ID {user_id} не найден",
+            reply_markup=get_admin_cancel()
+        )
+        return
+
+    user = stats['user']
+    
+    # Format text
+    text = (
+        f"👤 <b>Статистика пользователя</b>\n"
+        f"ID: <code>{user.telegram_id}</code>\n"
+        f"Username: @{user.username or 'N/A'}\n"
+        f"Имя: {user.first_name or ''} {user.last_name or ''}\n\n"
+        
+        f"📅 <b>Дата регистрации:</b> {user.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        
+        f"📸 <b>Генерации:</b>\n"
+        f"• Всего: {stats['total_used']}\n"
+        f"• Бесплатных: {stats['free_used']}\n"
+        f"• Платных: {stats['paid_used']}\n\n"
+        
+        f"💰 <b>Баланс:</b> {user.images_remaining} фотосессий\n\n"
+    )
+
+    # Purchases
+    if stats['orders']:
+        text += "🛒 <b>История покупок:</b>\n"
+        for order in stats['orders'][:5]: # Show last 5
+            date = order.paid_at.strftime('%d.%m.%Y')
+            text += f"• {date}: {order.package.name} ({order.amount}₽)\n"
+        if len(stats['orders']) > 5:
+            text += f"...и еще {len(stats['orders']) - 5}\n"
+        text += "\n"
+    else:
+        text += "🛒 <b>Покупок не было</b>\n\n"
+
+    # Manual Accruals
+    if stats['manual_accruals']:
+        text += "🎁 <b>Ручные начисления:</b>\n"
+        for order in stats['manual_accruals'][:5]:
+            date = order.paid_at.strftime('%d.%m.%Y')
+            count = order.package.photoshoots_count
+            text += f"• {date}: +{count} фотосессий\n"
+        if len(stats['manual_accruals']) > 5:
+            text += f"...и еще {len(stats['manual_accruals']) - 5}\n"
+        text += "\n"
+
+    # Add UTM info if available
+    if user.utm_source:
+        text += (
+            f"🏷 <b>UTM Метки:</b>\n"
+            f"Source: {user.utm_source}\n"
+            f"Medium: {user.utm_medium or '-'}\n"
+            f"Campaign: {user.utm_campaign or '-'}\n"
+        )
+
+    await state.clear()
+    await message.answer(text, parse_mode="HTML", reply_markup=get_admin_back())
 
 
 @router.callback_query(F.data == "admin_support")
