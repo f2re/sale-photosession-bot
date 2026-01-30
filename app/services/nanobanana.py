@@ -105,6 +105,11 @@ def translate_api_error_to_russian(error_message: str) -> str:
     )
 
 
+class NonRetryableGenerationError(Exception):
+    """Exception for errors that should not be retried (e.g. content policy violations)"""
+    pass
+
+
 class NanoBananaService:
     """Service for generating images via OpenRouter"""
 
@@ -126,6 +131,7 @@ class NanoBananaService:
 
         Raises:
             aiohttp.ClientError: On API errors
+            NonRetryableGenerationError: On fatal errors (policy, safety, etc)
         """
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -148,6 +154,14 @@ class NanoBananaService:
                     if not images:
                         # Get content for error analysis
                         content = message.get('content', '')
+                        
+                        # Check for fatal errors that shouldn't be retried
+                        content_lower = content.lower()
+                        fatal_keywords = ["person", "face", "safety", "policy", "inappropriate", "unable to generate"]
+                        if any(k in content_lower for k in fatal_keywords):
+                            logger.warning(f"Generation refused (fatal): {content[:200]}")
+                            raise NonRetryableGenerationError(content)
+                            
                         logger.error(f"No images in response. Content: ```\n{content[:500]}\n```")
                         raise aiohttp.ClientError(f"No images generated. API response: {content[:200]}")
 
@@ -155,6 +169,13 @@ class NanoBananaService:
                 else:
                     error_text = await response.text()
                     logger.error(f"API Error: {response.status} - {error_text}")
+                    
+                    # Check for fatal errors in 400/500 responses too
+                    error_lower = error_text.lower()
+                    fatal_keywords = ["person", "face", "safety", "policy", "inappropriate"]
+                    if any(k in error_lower for k in fatal_keywords):
+                         raise NonRetryableGenerationError(f"API rejection: {error_text[:200]}")
+                         
                     raise aiohttp.ClientError(f"API returned status {response.status}: {error_text[:200]}")
 
 

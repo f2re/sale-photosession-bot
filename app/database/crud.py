@@ -811,8 +811,8 @@ async def get_utm_statistics(session: AsyncSession) -> List[Dict[str, Any]]:
         User.utm_source,
         User.utm_medium,
         User.utm_campaign,
-        func.count(User.id).label('total_users'),
-        func.count(case((Order.status == 'paid', Order.id))).label('paying_users'),
+        func.count(func.distinct(User.id)).label('total_users'),
+        func.count(func.distinct(case((Order.status == 'paid', User.id)))).label('paying_users'),
         func.coalesce(func.sum(case((Order.status == 'paid', Order.amount), else_=0)), 0).label('revenue')
     ).outerjoin(
         Order, User.id == Order.user_id
@@ -826,7 +826,7 @@ async def get_utm_statistics(session: AsyncSession) -> List[Dict[str, Any]]:
         User.utm_medium,
         User.utm_campaign
     ).order_by(
-        func.count(User.id).desc()
+        func.count(func.distinct(User.id)).desc()
     )
 
     result = await session.execute(stmt)

@@ -92,7 +92,7 @@ class PaymentChecker:
                     bot=bot,
                     telegram_id=user_telegram_id,
                     package_name=order.package.name,
-                    images_count=order.package.images_count,
+                    images_count=order.package.photoshoots_count,
                     amount=float(order.amount),
                     new_balance=new_balance
                 )
@@ -106,7 +106,7 @@ class PaymentChecker:
                     user_telegram_id=user_telegram_id,
                     username=order.user.username,
                     package_name=order.package.name,
-                    images_count=order.package.images_count,
+                    images_count=order.package.photoshoots_count,
                     amount=float(order.amount),
                     order_id=order.id
                 )
@@ -118,7 +118,7 @@ class PaymentChecker:
                 from app.config import settings
 
                 # Calculate reward
-                referral_reward = int(order.package.images_count * settings.REFERRAL_REWARD_PURCHASE_PERCENT / 100)
+                referral_reward = int(order.package.photoshoots_count * settings.REFERRAL_REWARD_PURCHASE_PERCENT / 100)
 
                 if referral_reward > 0:
                     try:
