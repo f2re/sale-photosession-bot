@@ -458,6 +458,42 @@ Be maximally creative! Use different:
         logger.debug("No markdown wrapper found, returning content as-is")
         return content.strip()
 
+    def _normalize_variation_response(self, data: dict, product_name: str) -> dict:
+        """
+        Normalize LLM response to expected format.
+        Handles various field name variations that LLM might use.
+        
+        Transforms:
+        - 'variations' -> 'styles'
+        - Removes unwanted fields (original_style, aspect_ratio, base_style)
+        - Ensures product_name is present
+        
+        Args:
+            data: Response data from LLM
+            product_name: Product name to use if missing
+            
+        Returns:
+            Normalized data dict with correct structure
+        """
+        # Transform 'variations' -> 'styles'
+        if "variations" in data and "styles" not in data:
+            logger.info("Normalizing field: 'variations' -> 'styles'")
+            data["styles"] = data.pop("variations")
+        
+        # Ensure product_name is present
+        if "product_name" not in data:
+            logger.info(f"Adding missing product_name: {product_name}")
+            data["product_name"] = product_name
+        
+        # Remove unwanted fields that LLM might add
+        unwanted_fields = ["original_style", "aspect_ratio", "base_style", "original_prompt"]
+        for field in unwanted_fields:
+            if field in data:
+                logger.debug(f"Removing unwanted field: {field}")
+                data.pop(field)
+        
+        return data
+
     async def generate_styles_from_description(
         self,
         product_description: str,
@@ -545,7 +581,7 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
 
             # Parse JSON
             try:
-                logger.debug(f"LLM raw response (first 200 chars): {content}")
+                logger.debug(f"LLM raw response (first 200 chars): {content[:200]}...")
 
                 # Extract JSON from potential markdown wrapper
                 clean_json = self._extract_json_from_response(content)
@@ -681,6 +717,7 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
         try:
             logger.info(f"Generating {num_variations} variations of style: {base_style.get('style_name')}")
 
+            # IMPROVED: Explicit JSON structure with example to guarantee correct format
             user_prompt = f"""Product: {product_description}
 Aspect Ratio: {aspect_ratio}
 
@@ -688,15 +725,30 @@ ORIGINAL STYLE:
 Name: {base_style.get('style_name')}
 Prompt: {base_style.get('prompt')}
 
-Generate {num_variations} VARIATIONS of this style. Keep the core concept and mood, but vary:
-- Camera angles and distances
+Task: Generate {num_variations} variations of this style. Keep the core concept and mood, but vary:
+- Camera angles and distances (top-down, 45°, macro, etc.)
 - Lighting variations (same mood, different execution)
 - Subtle changes in composition
 - Minor prop/element variations
 
 All variations must maintain the original style's essence and atmosphere!
 
-Return result STRICTLY in JSON format with exactly {num_variations} style variations."""
+**CRITICAL: Return EXACTLY this JSON structure (use these field names):**
+{{
+  "product_name": "{product_name}",
+  "styles": [
+    {{
+      "style_name": "Variation name in Russian (2-3 words)",
+      "prompt": "Full English prompt text",
+      "tech": "Camera specs + lens + lighting",
+      "logic": "Why this variation works",
+      "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10"
+    }},
+    ... (exactly {num_variations} items total)
+  ]
+}}
+
+**IMPORTANT:** Use field name "styles" NOT "variations"! Do not include fields: "original_style", "aspect_ratio", "base_style"."""
 
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -734,9 +786,12 @@ Return result STRICTLY in JSON format with exactly {num_variations} style variat
             try:
                 clean_json = self._extract_json_from_response(content)
                 data = json.loads(clean_json)
+                
+                # ADDED: Normalize response structure before validation
+                data = self._normalize_variation_response(data, product_name)
 
                 if not self._validate_response(data, num_variations):
-                    logger.warning(f"Invalid JSON structure for variations")
+                    logger.warning(f"Invalid JSON structure after normalization. Keys: {data.keys()}")
                     error_msg = "Invalid JSON structure"
                     # Fallback: use base style duplicated
                     response_data = {
@@ -760,6 +815,7 @@ Return result STRICTLY in JSON format with exactly {num_variations} style variat
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse variation JSON: {e}")
+                logger.debug(f"Raw content: {content[:500]}...")
                 error_msg = f"JSON parse error: {str(e)}"
                 # Fallback: use base style duplicated
                 response_data = {
