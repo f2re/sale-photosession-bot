@@ -7,7 +7,7 @@ import aiohttp
 import json
 import re
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from app.config import settings
 from app.services.product_detector import ProductDetector
 from app.utils.api_retry import prompt_api_retry
@@ -90,8 +90,8 @@ class PromptGenerator:
 {
     "style_name": "[short style name in Russian (2-3 words)]",
     "prompt": "[Full text in English]",
-    "tech": [Camera + lens + lighting in English],
-    "logic": [Why these choices match scent],
+    "tech": "[Camera + lens + lighting in English]",
+    "logic": "[Why these choices match scent]",
     "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10",
 }
 ```
@@ -105,15 +105,15 @@ class PromptGenerator:
     {
         "style_name": "[short style name in Russian (2-3 words)]",
         "prompt": "[Full text in English]",
-        "tech": [Camera + lens + lighting in English],
-        "logic": [Why these choices match scent],
+        "tech": "[Camera + lens + lighting in English]",
+        "logic": "[Why these choices match scent]",
         "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10",
     },
     {
         "style_name": "[short style name in Russian (2-3 words)]",
         "prompt": "[Full text in English]",
-        "tech": [Camera + lens + lighting in English],
-        "logic": [Why these choices match scent],
+        "tech": "[Camera + lens + lighting in English]",
+        "logic": "[Why these choices match scent]",
         "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10",
     }
     ...
@@ -185,12 +185,13 @@ class PromptGenerator:
 
 ## QUALITY CHECKLIST
 
+- [ ] All required fields present: style_name, prompt, tech, logic, score
 - [ ] Negative prompt included
 - [ ] Max 3 supporting elements
 - [ ] Technical specs specified (lens/aperture)
 - [ ] Lighting source + quality described
 - [ ] All ratings ≥8/10
-- [ ] Copy-paste ready (no editing needed
+- [ ] Copy-paste ready (no editing needed)
 - [ ] Output format in JSON in preset style! important!
 
 **Production standards:**
@@ -284,8 +285,8 @@ Be maximally creative! Use different:
 {
     "style_name": "[short style name in Russian (2-3 words)]",
     "prompt": "[Full text in English]",
-    "tech": [Camera + lens + lighting in English],
-    "logic": [Why these choices match scent],
+    "tech": "[Camera + lens + lighting in English]",
+    "logic": "[Why these choices match scent]",
     "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10",
 }
 ```
@@ -299,15 +300,15 @@ Be maximally creative! Use different:
     {
         "style_name": "[short style name in Russian (2-3 words)]",
         "prompt": "[Full text in English]",
-        "tech": [Camera + lens + lighting in English],
-        "logic": [Why these choices match scent],
+        "tech": "[Camera + lens + lighting in English]",
+        "logic": "[Why these choices match scent]",
         "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10",
     },
     {
         "style_name": "[short style name in Russian (2-3 words)]",
         "prompt": "[Full text in English]",
-        "tech": [Camera + lens + lighting in English],
-        "logic": [Why these choices match scent],
+        "tech": "[Camera + lens + lighting in English]",
+        "logic": "[Why these choices match scent]",
         "score": "Realism X/10 | Minimalism Y/10 | Mood Z/10",
     }
     ...
@@ -379,12 +380,13 @@ Be maximally creative! Use different:
 
 ## QUALITY CHECKLIST
 
+- [ ] All required fields present: style_name, prompt, tech, logic, score
 - [ ] Negative prompt included
 - [ ] Max 3 supporting elements
 - [ ] Technical specs specified (lens/aperture)
 - [ ] Lighting source + quality described
 - [ ] All ratings ≥8/10
-- [ ] Copy-paste ready (no editing needed
+- [ ] Copy-paste ready (no editing needed)
 - [ ] Output format in JSON in preset style! important!
 
 **Production standards:**
@@ -494,6 +496,122 @@ Be maximally creative! Use different:
         
         return data
 
+    def _check_styles_quality(self, styles: List[Dict]) -> Tuple[bool, List[str]]:
+        """
+        Check if all styles have required quality fields (tech, logic, score).
+        
+        Args:
+            styles: List of style dictionaries to check
+            
+        Returns:
+            Tuple of (is_complete, missing_fields_description)
+            - is_complete: True if all styles have all required fields
+            - missing_fields_description: List of descriptions of missing fields
+        """
+        required_fields = ["style_name", "prompt", "tech", "logic", "score"]
+        missing_info = []
+        
+        for i, style in enumerate(styles):
+            style_missing = []
+            for field in required_fields:
+                if field not in style or not style[field] or str(style[field]).strip() == "":
+                    style_missing.append(field)
+            
+            if style_missing:
+                missing_info.append(f"Style #{i+1} ({style.get('style_name', 'unnamed')}): missing {', '.join(style_missing)}")
+        
+        is_complete = len(missing_info) == 0
+        return is_complete, missing_info
+
+    async def _generate_styles_with_retry(
+        self,
+        payload: dict,
+        headers: dict,
+        product_description: str,
+        num_styles: int,
+        operation_name: str = "generation"
+    ) -> Tuple[Optional[dict], Optional[str]]:
+        """
+        Generate styles with automatic retry on quality issues.
+        
+        Args:
+            payload: API request payload
+            headers: API request headers
+            product_description: Product description
+            num_styles: Expected number of styles
+            operation_name: Name of operation for logging
+            
+        Returns:
+            Tuple of (response_data, error_message)
+        """
+        max_attempts = 2  # 1 initial + 1 retry
+        
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Make API call
+                result = await prompt_api_retry.execute_with_retry(
+                    self._make_api_request,
+                    payload,
+                    headers
+                )
+                
+                content = result['choices'][0]['message']['content']
+                
+                # Extract and parse JSON
+                clean_json = self._extract_json_from_response(content)
+                data = json.loads(clean_json)
+                
+                # Validate structure
+                if not self._validate_response(data, num_styles):
+                    logger.warning(f"[Attempt {attempt}/{max_attempts}] Invalid structure: {data.keys()}")
+                    if attempt < max_attempts:
+                        logger.info("Retrying with stricter prompt...")
+                        # Add stricter requirement to user prompt
+                        payload["messages"][-1]["content"] += "\n\n**CRITICAL WARNING**: Previous attempt failed validation. You MUST include ALL fields for EVERY style: style_name, prompt, tech, logic, score. Do not skip any fields!"
+                        payload["temperature"] = 0.6  # Lower temperature for more focused output
+                        continue
+                    else:
+                        return None, "Invalid JSON structure after retry"
+                
+                # Check quality of styles
+                is_complete, missing_fields = self._check_styles_quality(data.get("styles", []))
+                
+                if not is_complete:
+                    logger.warning(f"[Attempt {attempt}/{max_attempts}] Incomplete styles detected:")
+                    for missing in missing_fields:
+                        logger.warning(f"  - {missing}")
+                    
+                    if attempt < max_attempts:
+                        logger.info("Retrying to get complete styles with all metadata fields...")
+                        # Add specific field requirements
+                        payload["messages"][-1]["content"] += f"\n\n**RETRY REQUIRED**: Previous generation was incomplete. Missing fields detected:\n{chr(10).join(missing_fields)}\n\nYou MUST provide ALL of these fields for EVERY style:\n1. style_name (2-3 words in Russian)\n2. prompt (full English text)\n3. tech (camera specs + lens + lighting)\n4. logic (reasoning for choices)\n5. score (format: 'Realism X/10 | Minimalism Y/10 | Mood Z/10')\n\nDo NOT skip any field!"
+                        payload["temperature"] = 0.5  # Even lower temperature
+                        continue
+                    else:
+                        logger.warning("Returning incomplete styles after retry")
+                        # Return what we have - better than nothing
+                
+                logger.info(f"[Attempt {attempt}/{max_attempts}] Successfully generated {len(data['styles'])} complete styles")
+                return data, None
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"[Attempt {attempt}/{max_attempts}] JSON parse error: {e}")
+                if attempt < max_attempts:
+                    logger.info("Retrying due to JSON parse error...")
+                    continue
+                else:
+                    return None, f"JSON parse error: {str(e)}"
+            
+            except Exception as e:
+                logger.error(f"[Attempt {attempt}/{max_attempts}] Error in {operation_name}: {e}")
+                if attempt < max_attempts:
+                    logger.info(f"Retrying due to error: {e}")
+                    continue
+                else:
+                    return None, str(e)
+        
+        return None, "Failed after all retry attempts"
+
     async def generate_styles_from_description(
         self,
         product_description: str,
@@ -502,7 +620,7 @@ Be maximally creative! Use different:
         num_styles: int = 4
     ) -> Dict:
         """
-        Generates specified number of styles for the product
+        Generates specified number of styles for the product with automatic retry on quality issues.
 
         Args:
             product_description: Product description or "product from image"
@@ -515,7 +633,7 @@ Be maximally creative! Use different:
                 "success": bool,
                 "product_name": str,
                 "styles": [
-                    {"style_name": "...", "prompt": "..."},
+                    {"style_name": "...", "prompt": "...", "tech": "...", "logic": "...", "score": "..."},
                     ...
                 ],
                 "error": Optional[str]
@@ -540,7 +658,14 @@ Number of styles: {num_styles}
 
 {"Create " + str(num_styles) + " RANDOM, maximally DIFFERENT and CREATIVE styles with various angles and lighting!" if random else "Create " + str(num_styles) + " distinct professional styles with diverse lighting and angles."}
 
-Return result STRICTLY in JSON format with exactly {num_styles} styles."""
+Return result STRICTLY in JSON format with exactly {num_styles} styles.
+
+**IMPORTANT**: Each style MUST include ALL of these fields:
+- style_name (2-3 words in Russian)
+- prompt (full English text)
+- tech (camera specs + lens + lighting)
+- logic (reasoning for choices)
+- score (format: 'Realism X/10 | Minimalism Y/10 | Mood Z/10')"""
 
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -570,33 +695,17 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
 
             logger.info(f"Generating {'random' if random else 'analyzed'} styles for: {product_text[:50]}")
 
-            # Use retry handler for resilient API calls
-            result = await prompt_api_retry.execute_with_retry(
-                self._make_api_request,
+            # Use retry mechanism for quality assurance
+            data, error = await self._generate_styles_with_retry(
                 payload,
-                headers
+                headers,
+                product_description,
+                num_styles,
+                "style generation"
             )
 
-            content = result['choices'][0]['message']['content']
-
-            # Parse JSON
-            try:
-                logger.debug(f"LLM raw response (first 200 chars): {content[:200]}...")
-
-                # Extract JSON from potential markdown wrapper
-                clean_json = self._extract_json_from_response(content)
-                logger.debug(f"Clean JSON (first 200 chars): {clean_json[:200]}...")
-
-                # Parse the cleaned JSON
-                data = json.loads(clean_json)
-
-                # Validate structure
-                if not self._validate_response(data, num_styles):
-                    logger.warning(f"Invalid JSON structure: {data}")
-                    raise ValueError("Invalid JSON structure")
-
+            if data:
                 logger.info(f"Successfully generated styles for: {data.get('product_name', 'unknown')}")
-
                 success = True
                 response_data = {
                     "success": True,
@@ -604,14 +713,10 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
                     "styles": data["styles"],
                     "error": None
                 }
-
                 return response_data
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON response: {e}")
-                logger.debug(f"Response content: {content}")
-                logger.warning("Using fallback prompts")
-                error_msg = f"JSON parse error: {str(e)}"
+            else:
+                logger.warning("Style generation failed, using fallback")
+                error_msg = error
                 response_data = self._fallback_response(product_description, aspect_ratio)
                 return response_data
 
@@ -691,7 +796,7 @@ Return result STRICTLY in JSON format with exactly {num_styles} styles."""
         num_variations: int = 4
     ) -> Dict:
         """
-        Generate variations of a specific style (expensive Claude Sonnet call)
+        Generate variations of a specific style with automatic retry on quality issues.
 
         Args:
             base_style: Base style dict with style_name and prompt
@@ -748,7 +853,10 @@ All variations must maintain the original style's essence and atmosphere!
   ]
 }}
 
-**IMPORTANT:** Use field name "styles" NOT "variations"! Do not include fields: "original_style", "aspect_ratio", "base_style"."""
+**IMPORTANT:** 
+- Use field name "styles" NOT "variations"! 
+- Do not include fields: "original_style", "aspect_ratio", "base_style".
+- ALL fields (style_name, prompt, tech, logic, score) are REQUIRED for each variation!"""
 
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -774,36 +882,20 @@ All variations must maintain the original style's essence and atmosphere!
                 "response_format": {"type": "json_object"}
             }
 
-            # Use retry handler for resilient API calls
-            result = await prompt_api_retry.execute_with_retry(
-                self._make_api_request,
+            # Use retry mechanism for quality assurance
+            data, error = await self._generate_styles_with_retry(
                 payload,
-                headers
+                headers,
+                product_description,
+                num_variations,
+                "style variations"
             )
 
-            content = result['choices'][0]['message']['content']
-
-            try:
-                clean_json = self._extract_json_from_response(content)
-                data = json.loads(clean_json)
-                
-                # ADDED: Normalize response structure before validation
+            if data:
+                # Normalize response structure
                 data = self._normalize_variation_response(data, product_name)
-
-                if not self._validate_response(data, num_variations):
-                    logger.warning(f"Invalid JSON structure after normalization. Keys: {data.keys()}")
-                    error_msg = "Invalid JSON structure"
-                    # Fallback: use base style duplicated
-                    response_data = {
-                        "success": True,
-                        "product_name": product_name,
-                        "styles": [base_style] * num_variations,
-                        "error": None
-                    }
-                    return response_data
-
+                
                 logger.info(f"Successfully generated {len(data['styles'])} style variations")
-
                 success = True
                 response_data = {
                     "success": True,
@@ -812,12 +904,9 @@ All variations must maintain the original style's essence and atmosphere!
                     "error": None
                 }
                 return response_data
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse variation JSON: {e}")
-                logger.debug(f"Raw content: {content[:500]}...")
-                error_msg = f"JSON parse error: {str(e)}"
-                # Fallback: use base style duplicated
+            else:
+                logger.warning("Variation generation failed, using base style as fallback")
+                error_msg = error
                 response_data = {
                     "success": True,
                     "product_name": product_name,
